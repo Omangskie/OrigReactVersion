@@ -338,18 +338,23 @@ app.post('/api/payments/session', async (req, res) => {
 
 app.get('/api/payments/status/:reference', async (req, res) => {
   const reference = req.params.reference;
+  const paymentIntentIdFromQuery =
+    typeof req.query?.paymentIntentId === 'string' && req.query.paymentIntentId.trim()
+      ? req.query.paymentIntentId.trim()
+      : '';
   const session = paymentSessions.get(reference);
+  const paymentIntentId = session?.paymentIntentId || paymentIntentIdFromQuery;
 
-  if (!session) {
+  if (!paymentIntentId) {
     return res.status(404).json({ message: 'Payment session not found.' });
   }
 
-  if (Date.now() >= session.expiresAt && session.status !== 'paid') {
+  if (session && Date.now() >= session.expiresAt && session.status !== 'paid') {
     session.status = 'expired';
     paymentSessions.set(reference, session);
     return res.json({
       reference,
-      paymentIntentId: session.paymentIntentId,
+      paymentIntentId,
       status: 'expired',
       paymongoKeyMode,
       amount: session.amount,
@@ -361,32 +366,34 @@ app.get('/api/payments/status/:reference', async (req, res) => {
   if (!paymongoSecretKey) {
     return res.json({
       reference,
-      paymentIntentId: session.paymentIntentId,
-      status: session.status,
+      paymentIntentId,
+      status: session?.status || 'waiting',
       paymongoKeyMode,
-      amount: session.amount,
-      amountInCentavos: session.amountInCentavos,
-      expiresAt: session.expiresAt,
+      amount: session?.amount || null,
+      amountInCentavos: session?.amountInCentavos || null,
+      expiresAt: session?.expiresAt || null,
     });
   }
 
   try {
-    const paymentIntent = await retrievePaymentIntent(session.paymentIntentId);
+    const paymentIntent = await retrievePaymentIntent(paymentIntentId);
     const paymentIntentStatus = paymentIntent?.data?.attributes?.status;
     const status = mapPaymentIntentStatus(paymentIntentStatus);
     const attributes = paymentIntent?.data?.attributes || {};
 
-    session.status = status;
-    session.lastPaymentIntent = {
-      status: paymentIntentStatus || null,
-      lastPaymentError: attributes.last_payment_error || null,
-      updatedAt: attributes.updated_at || null,
-    };
-    paymentSessions.set(reference, session);
+    if (session) {
+      session.status = status;
+      session.lastPaymentIntent = {
+        status: paymentIntentStatus || null,
+        lastPaymentError: attributes.last_payment_error || null,
+        updatedAt: attributes.updated_at || null,
+      };
+      paymentSessions.set(reference, session);
+    }
 
     res.json({
       reference,
-      paymentIntentId: session.paymentIntentId,
+      paymentIntentId,
       status,
       paymongoKeyMode,
       paymentIntentStatus,
@@ -395,10 +402,10 @@ app.get('/api/payments/status/:reference', async (req, res) => {
       paymentIntentPayments: attributes.payments?.data || [],
       paymentIntentPaidAt: attributes.paid_at || null,
       paymentIntentUpdatedAt: attributes.updated_at || null,
-      lastWebhookEvent: session.lastWebhookEvent || null,
-      amount: session.amount,
-      amountInCentavos: session.amountInCentavos,
-      expiresAt: session.expiresAt,
+      lastWebhookEvent: session?.lastWebhookEvent || null,
+      amount: session?.amount || null,
+      amountInCentavos: session?.amountInCentavos || null,
+      expiresAt: session?.expiresAt || null,
     });
   } catch (error) {
     res.status(502).json({

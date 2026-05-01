@@ -14,6 +14,7 @@ export const Checkout = () => {
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
   const [paymentError, setPaymentError] = useState('');
   const [paymentReference, setPaymentReference] = useState('');
+  const [paymentIntentId, setPaymentIntentId] = useState('');
   const [paymentStatus, setPaymentStatus] = useState('idle');
   const [paymentMessage, setPaymentMessage] = useState('');
   const [creatingSession, setCreatingSession] = useState(false);
@@ -71,6 +72,7 @@ export const Checkout = () => {
     setPaymentConfigHint('');
     setPaymentStatus('creating');
     setPaymentMessage('Creating PayMongo payment session...');
+    setPaymentIntentId('');
 
     try {
       const response = await fetch('/api/payments/session', {
@@ -87,7 +89,16 @@ export const Checkout = () => {
           setPaymentConfigHint(data.hint);
         }
 
-        throw new Error(data?.message || `Unable to create payment session. HTTP ${response.status}`);
+        if (!data?.hint && [502, 503, 504].includes(response.status)) {
+          setPaymentConfigHint('Payment API appears offline. Start it with: npm run api (or npm run dev).');
+        }
+
+        throw new Error(
+          data?.message ||
+            ([502, 503, 504].includes(response.status)
+              ? 'Payment API is unreachable. Start it with: npm run api'
+              : `Unable to create payment session. HTTP ${response.status}`)
+        );
       }
 
       if (!data) {
@@ -95,6 +106,7 @@ export const Checkout = () => {
       }
 
       setPaymentReference(data.reference || generatedReference);
+      setPaymentIntentId(data.paymentIntentId || '');
       setPaymentQrUrl(data.qrImageUrl || '');
       setPaymentCheckoutUrl(data.checkoutUrl || '');
 
@@ -137,7 +149,7 @@ export const Checkout = () => {
   };
 
   useEffect(() => {
-    if (!shippingSubmitted || paymentConfirmed || !paymentReference) {
+    if (!shippingSubmitted || paymentConfirmed || !paymentReference || !paymentIntentId) {
       return;
     }
 
@@ -145,7 +157,9 @@ export const Checkout = () => {
 
     const verifyPaymentStatus = async () => {
       try {
-        const response = await fetch(`/api/payments/status/${paymentReference}`);
+        const response = await fetch(
+          `/api/payments/status/${paymentReference}?paymentIntentId=${encodeURIComponent(paymentIntentId)}`
+        );
         const data = await parseApiJson(response);
 
         if (!response.ok) {
@@ -193,7 +207,7 @@ export const Checkout = () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [shippingSubmitted, paymentConfirmed, paymentReference]);
+  }, [shippingSubmitted, paymentConfirmed, paymentReference, paymentIntentId]);
 
   const handlePaymentConfirmed = () => {
     if (!paymentConfirmed || processing || completed) {
