@@ -66,6 +66,10 @@ const createOfflineFallbackProfile = (firebaseUser) =>
     status: "active",
   });
 
+const isExpectedProfileFallbackError = (error) =>
+  error?.code === "permission-denied" ||
+  error?.message === "Timed out while loading user profile.";
+
 const withTimeout = (promise, timeoutMs, timeoutMessage) =>
   new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
@@ -178,8 +182,13 @@ export const AuthContextProvider = ({ children }) => {
         "Timed out while loading user profile."
       );
     } catch (error) {
-      console.error("Unable to load user profile from Firestore, using fallback profile:", error);
-      profile = createOfflineFallbackProfile(firebaseUser);
+      if (isExpectedProfileFallbackError(error)) {
+        console.info("Using fallback profile because Firestore profile sync is currently unavailable.");
+      } else {
+        console.error("Unable to load user profile from Firestore, using fallback profile:", error);
+      }
+      profile =
+        userProfile?.uid === firebaseUser.uid ? userProfile : createOfflineFallbackProfile(firebaseUser);
     }
 
     if (isBlockedStatus(profile.status)) {
@@ -268,13 +277,45 @@ export const AuthContextProvider = ({ children }) => {
   }, [db, session?.uid, session?.email, userProfile?.role]);
 
   //Sign Up
-  const signUpNewUser = async (email, password) => {
+  const signUpNewUser = async (email, password, options = {}) => {
     try {
       const data = await createUserWithEmailAndPassword(auth, email, password);
       await sendEmailVerification(data.user);
-      const profile = await refreshUserSnapshot(data.user);
+      const shouldCreateAdminProfile = options?.role === "admin";
+
+      const fallbackProfile = normalizeUserProfile(data.user.uid, data.user, {
+        email: data.user.email || email,
+        phone: "",
+        role: shouldCreateAdminProfile ? "admin" : "customer",
+        status: "active",
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      });
 
       setSession(data.user);
+      setUserProfile(fallbackProfile);
+
+      let profile = fallbackProfile;
+
+      try {
+        profile = shouldCreateAdminProfile ? fallbackProfile : await refreshUserSnapshot(data.user);
+
+        if (!shouldCreateAdminProfile) {
+          setUserProfile(profile);
+        }
+
+        if (shouldCreateAdminProfile) {
+          await setDoc(doc(db, "users", data.user.uid), profile, { merge: true });
+        }
+      } catch (profileError) {
+        if (profileError?.code !== "permission-denied") {
+          throw profileError;
+        }
+
+        console.info("Unable to sync user profile to Firestore, continuing with local profile.");
+        profile = fallbackProfile;
+      }
+
       setUserProfile(profile);
 
       return {
