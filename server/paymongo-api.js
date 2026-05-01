@@ -21,6 +21,47 @@ const paymongoBaseUrl = 'https://api.paymongo.com/v1';
 const paymongoKeyMode = paymongoSecretKey?.startsWith('sk_live_') ? 'live' : paymongoSecretKey?.startsWith('sk_test_') ? 'test' : 'unknown';
 const paymongoWebhookSecret = process.env.PAYMONGO_WEBHOOK_SECRET?.trim();
 
+const otpStore = new Map();
+const OTP_TTL_MS = 5 * 60 * 1000;
+const MAX_OTP_ATTEMPTS = 5;
+const BREVO_API_KEY = process.env.BREVO_API_KEY?.trim();
+const BREVO_SENDER_NAME = process.env.BREVO_SENDER_NAME?.trim() || 'Originals Printing';
+const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL?.trim() || 'noreply@originalsprinting.local';
+
+const normalizeEmail = (value) => typeof value === 'string' ? value.trim().toLowerCase() : '';
+const generateOtpCode = () => Math.floor(100000 + Math.random() * 900000).toString();
+
+const sendBrevoOtpEmail = async (email, code) => {
+  if (!BREVO_API_KEY) {
+    throw new Error('BREVO_API_KEY is not configured.');
+  }
+
+  const payload = {
+    sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+    to: [{ email }],
+    subject: 'Your Originals Printing verification code',
+    htmlContent: `<html><body><p>Your Originals verification code is <strong>${code}</strong>.</p><p>This code expires in 5 minutes.</p></body></html>`,
+    textContent: `Your Originals verification code is ${code}. This code expires in 5 minutes.`,
+  };
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'api-key': BREVO_API_KEY,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Brevo request failed: ${response.status} ${body}`);
+  }
+
+  return response.json();
+};
+
 const createAuthorizationHeader = () => {
   if (!paymongoSecretKey) {
     return '';
@@ -182,7 +223,66 @@ app.get('/api/health', (_req, res) => {
     paymongoKeyMode,
     paymongoKeyPrefix: paymongoSecretKey ? paymongoSecretKey.slice(0, 7) : null,
     webhookConfigured: Boolean(paymongoWebhookSecret),
+    brevoConfigured: Boolean(BREVO_API_KEY),
   });
+});
+
+app.post('/api/auth/send-otp', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ message: 'Please provide a valid email address.' });
+  }
+
+  if (!BREVO_API_KEY) {
+    return res.status(500).json({ message: 'BREVO_API_KEY is not configured on the server.' });
+  }
+
+  const code = generateOtpCode();
+  const expiresAt = Date.now() + OTP_TTL_MS;
+  otpStore.set(email, { code, expiresAt, attemptsLeft: MAX_OTP_ATTEMPTS });
+
+  try {
+    await sendBrevoOtpEmail(email, code);
+    return res.json({ ok: true, message: 'Verification code sent to your email.' });
+  } catch (error) {
+    console.error('Brevo OTP send error:', error);
+    otpStore.delete(email);
+    return res.status(500).json({ message: error?.message || 'Failed to send verification code.' });
+  }
+});
+
+app.post('/api/auth/verify-otp', (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const code = String(req.body?.code || '').trim();
+
+  if (!email || !code) {
+    return res.status(400).json({ message: 'Email and verification code are required.' });
+  }
+
+  const record = otpStore.get(email);
+  if (!record) {
+    return res.status(400).json({ message: 'No active verification request found. Please request a new code.' });
+  }
+
+  if (record.expiresAt < Date.now()) {
+    otpStore.delete(email);
+    return res.status(400).json({ message: 'The verification code has expired. Please request a new one.' });
+  }
+
+  if (record.attemptsLeft <= 0) {
+    otpStore.delete(email);
+    return res.status(400).json({ message: 'Too many incorrect attempts. Please request a new verification code.' });
+  }
+
+  if (record.code !== code) {
+    record.attemptsLeft -= 1;
+    otpStore.set(email, record);
+    return res.status(400).json({ message: `Invalid verification code. ${record.attemptsLeft} attempt(s) remaining.` });
+  }
+
+  otpStore.delete(email);
+  return res.json({ ok: true, message: 'Verification succeeded.' });
 });
 
 app.post('/api/payments/webhook', async (req, res) => {

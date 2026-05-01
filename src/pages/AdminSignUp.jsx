@@ -35,7 +35,7 @@ const AdminSignUp = () => {
   );
 
   useEffect(() => {
-    if (!authReady || !session) {
+    if (!authReady || !session || loading) {
       return;
     }
 
@@ -50,7 +50,7 @@ const AdminSignUp = () => {
     }
 
     navigate("/homepage", { replace: true });
-  }, [authReady, navigate, session, userProfile, isConfiguredAdminEmail]);
+  }, [authReady, loading, navigate, session, userProfile, isConfiguredAdminEmail]);
 
   const checks = passwordChecks(password);
   const validPassword = Object.values(checks).every(Boolean);
