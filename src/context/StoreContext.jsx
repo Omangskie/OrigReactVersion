@@ -11,6 +11,8 @@ const CART_STORAGE_KEY = 'theoriginals.cart';
 
 const getCartItemKey = (productId, size) => `${productId}::${size || 'default'}`;
 
+const ORDER_STATUS_STEPS = ['Processing', 'Shipped', 'Delivered', 'Complete'];
+
 const createInitialCatalog = () => {
   if (typeof window === 'undefined') {
     return PRODUCTS.map((product) => ({ ...product, isArchived: false }));
@@ -270,19 +272,18 @@ export const StoreProvider = ({ children }) => {
     
     setOrders((prev) => [newOrder, ...prev]);
     clearCart();
-    
-    // Simulate order progression
-    setTimeout(() => {
-      setOrders(prev => prev.map(o => o.id === newOrder.id ? { ...o, status: 'Shipped' } : o));
-    }, 15000);
-    setTimeout(() => {
-      setOrders(prev => prev.map(o => o.id === newOrder.id ? { ...o, status: 'Out for Delivery' } : o));
-    }, 30000);
-    setTimeout(() => {
-      setOrders(prev => prev.map(o => o.id === newOrder.id ? { ...o, status: 'Delivered' } : o));
-    }, 45000);
 
     return newOrder.id;
+  };
+
+  const updateOrderStatus = (orderId, nextStatus) => {
+    if (!ORDER_STATUS_STEPS.includes(nextStatus)) {
+      return;
+    }
+
+    setOrders((prev) =>
+      prev.map((order) => (order.id === orderId ? { ...order, status: nextStatus } : order))
+    );
   };
 
   return (
@@ -308,6 +309,7 @@ export const StoreProvider = ({ children }) => {
         getCartItemKey,
         orders,
         placeOrder,
+        updateOrderStatus,
       }}
     >
       {children}

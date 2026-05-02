@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 import { useStore } from '../context/StoreContext';
 import { Package, Truck, CheckCircle, Clock } from 'lucide-react';
 
-const STATUS_STEPS = ['Processing', 'Shipped', 'Out for Delivery', 'Delivered'];
+const STATUS_STEPS = ['Processing', 'Shipped', 'Delivered', 'Complete'];
 
 export const Tracking = () => {
   const { orders } = useStore();
@@ -67,13 +67,16 @@ export const Tracking = () => {
               <motion.div 
                 className="absolute top-1/2 left-0 h-0.5 bg-emerald-500 -translate-y-1/2"
                 initial={{ width: '0%' }}
-                animate={{ width: `${(STATUS_STEPS.indexOf(order.status) / (STATUS_STEPS.length - 1)) * 100}%` }}
+                animate={{
+                  width: `${Math.max(0, (STATUS_STEPS.indexOf(order.status) / (STATUS_STEPS.length - 1)) * 100)}%`,
+                }}
                 transition={{ duration: 1, ease: 'easeOut' }}
               />
 
               <div className="relative flex justify-between">
                 {STATUS_STEPS.map((step, index) => {
-                  const isActive = STATUS_STEPS.indexOf(order.status) >= index;
+                  const statusIndex = STATUS_STEPS.indexOf(order.status);
+                  const isActive = statusIndex >= index;
                   const isCurrent = order.status === step;
                   
                   return (
