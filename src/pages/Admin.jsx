@@ -9,9 +9,10 @@ import PricingForm from '../components/admin/PricingForm';
 
 export default function Admin() {
   const { session, userProfile, users, signOut, suspendUser, deleteUser, restoreUser, setUserRole } = useUserAuth();
-  const { activeProducts, archivedProducts, archiveProduct, restoreProduct, updateProduct, addProduct, orders } = useStore();
+  const { activeProducts, archivedProducts, archiveProduct, restoreProduct, updateProduct, addProduct, orders, updateOrderStatus } = useStore();
   const [busyUserId, setBusyUserId] = useState('');
   const [busyProductId, setBusyProductId] = useState('');
+  const [busyOrderId, setBusyOrderId] = useState('');
   const [selectedProductId, setSelectedProductId] = useState('');
   const [productForm, setProductForm] = useState({
     name: '',
@@ -136,6 +137,15 @@ export default function Admin() {
       }
     } finally {
       setBusyUserId('');
+    }
+  };
+
+  const handleOrderStatusChange = (orderId, status) => {
+    setBusyOrderId(orderId);
+    try {
+      updateOrderStatus(orderId, status);
+    } finally {
+      setBusyOrderId('');
     }
   };
 
@@ -829,16 +839,61 @@ export default function Admin() {
 
                       return (
                         <div key={order.id} className="rounded-3xl border border-white/10 bg-white/5 p-4 text-sm">
-                          <div className="flex items-start justify-between gap-4">
-                            <div>
-                              <p className="font-semibold text-zinc-100">{order.purchaserEmail || 'Unknown buyer'}</p>
-                              <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">
-                                {order.purchaserRole || 'customer'} · {new Date(order.date).toLocaleDateString()}
-                              </p>
+                          <div className="flex flex-col gap-4">
+                            <div className="flex items-start justify-between gap-4">
+                              <div>
+                                <p className="font-semibold text-zinc-100">{order.purchaserEmail || 'Unknown buyer'}</p>
+                                <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">
+                                  {order.purchaserRole || 'customer'} · {new Date(order.date).toLocaleDateString()}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="font-semibold text-emerald-300">₱{order.total.toFixed(2)}</p>
+                                <p className="text-xs text-zinc-500">{itemCount} items sold</p>
+                              </div>
                             </div>
-                            <div className="text-right">
-                              <p className="font-semibold text-emerald-300">₱{order.total.toFixed(2)}</p>
-                              <p className="text-xs text-zinc-500">{itemCount} items sold</p>
+
+                            <div className="grid gap-3 sm:grid-cols-[1fr_auto] items-center">
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.35em] text-emerald-300">
+                                    {order.status}
+                                  </span>
+                                  <span className="text-xs uppercase tracking-[0.35em] text-zinc-500">Order ID {order.id}</span>
+                                </div>
+                                <label className="block text-xs uppercase tracking-[0.35em] text-zinc-400">
+                                  Update tracking status
+                                </label>
+                                <select
+                                  value={order.status}
+                                  onChange={(event) => handleOrderStatusChange(order.id, event.target.value)}
+                                  disabled={busyOrderId === order.id}
+                                  className="w-full rounded-2xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-400"
+                                >
+                                  {[
+                                    'Processing',
+                                    'Shipped',
+                                    'Delivered',
+                                    'Complete',
+                                    ...(order.status && !['Processing', 'Shipped', 'Delivered', 'Complete'].includes(order.status)
+                                      ? [order.status]
+                                      : []),
+                                  ].map((statusOption) => (
+                                    <option key={statusOption} value={statusOption} className="bg-slate-950 text-zinc-100">
+                                      {statusOption}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleOrderStatusChange(order.id, order.status)}
+                                disabled={busyOrderId === order.id}
+                                className="rounded-2xl bg-emerald-400 px-4 py-3 text-xs font-bold uppercase tracking-[0.25em] text-slate-950 hover:bg-emerald-300 disabled:opacity-60"
+                              >
+                                Save
+                              </button>
                             </div>
                           </div>
                         </div>
