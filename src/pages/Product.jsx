@@ -20,6 +20,10 @@ export const ProductDetail = () => {
   const [selectedVariant, setSelectedVariant] = useState('');
 
   useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [id]);
+
+  useEffect(() => {
     if (!product) {
       return;
     }
