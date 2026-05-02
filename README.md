@@ -13,6 +13,18 @@ The React Compiler is enabled on this template. See [this documentation](https:/
 
 Note: This will impact Vite dev & build performances.
 
+## Environment variables
+
+This project uses a server API that reads configuration from a `.env` file at the workspace root.
+
+1. Copy `.env.example` to `.env`.
+2. Fill in your real secret values, especially `BREVO_API_KEY` and `PAYMONGO_SECRET_KEY`.
+3. Restart the server after updating `.env`.
+
+The forgot-password flow requires `BREVO_API_KEY` to be set, otherwise the backend returns:
+
+`BREVO_API_KEY is not configured on the server.`
+
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
