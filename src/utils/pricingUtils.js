@@ -131,8 +131,8 @@ export const validatePricingData = (data) => {
 /**
  * Format price for display
  * @param {number} price - Price to format
- * @returns {string} Formatted price with dollar sign
+ * @returns {string} Formatted price with peso sign
  */
 export const formatPrice = (price) => {
-  return `$${(parseFloat(price) || 0).toFixed(2)}`;
+  return `₱${(parseFloat(price) || 0).toFixed(2)}`;
 };

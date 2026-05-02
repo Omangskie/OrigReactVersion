@@ -6,6 +6,7 @@ import {
   onAuthStateChanged,
   reload,
   sendEmailVerification,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
 } from "firebase/auth";
@@ -332,6 +333,16 @@ export const AuthContextProvider = ({ children }) => {
 
   };
 
+  const resetUserPassword = async (email) => {
+    try {
+      await sendPasswordResetEmail(auth, email);
+      return { success: true, message: "Password reset email sent." };
+    } catch (error) {
+      console.error("Error sending password reset email:", error);
+      return { success: false, error: mapFirebaseAuthError(error), code: error?.code };
+    }
+  };
+
   //Sign In
   const signInUser = async (email, password) => {
     try {
@@ -457,6 +468,7 @@ export const AuthContextProvider = ({ children }) => {
       checkEmailVerification,
       signOut,
       refreshUserSnapshot,
+      resetUserPassword,
       suspendUser,
       deleteUser,
       restoreUser,

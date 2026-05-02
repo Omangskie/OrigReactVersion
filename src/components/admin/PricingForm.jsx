@@ -113,7 +113,7 @@ export default function PricingForm({ product, onSave, isLoading = false }) {
           Price Per {UNIT_LABELS[formData.unitType]?.split('(')[0].trim() || 'Unit'}
         </label>
         <div className="relative">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400">$</span>
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400">₱</span>
           <input
             type="number"
             name="pricePerUnit"

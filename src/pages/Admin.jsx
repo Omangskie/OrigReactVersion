@@ -315,7 +315,7 @@ export default function Admin() {
                     { label: 'Active users', value: metrics.activeUsers, icon: Users },
                     { label: 'Items sold', value: metrics.soldItems, icon: ShoppingBag },
                     { label: 'Active products', value: activeProducts.length, icon: UserRoundCog },
-                    { label: 'Normal user revenue', value: `$${metrics.revenueFromNormalUsers.toFixed(2)}`, icon: BarChart3 },
+                    { label: 'Normal user revenue', value: `₱${metrics.revenueFromNormalUsers.toFixed(2)}`, icon: BarChart3 },
                   ].map((item) => {
                     const Icon = item.icon;
 
@@ -356,7 +356,7 @@ export default function Admin() {
                       </div>
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-zinc-400">Normal user revenue</span>
-                        <span className="font-semibold text-zinc-100">${metrics.revenueFromNormalUsers.toFixed(2)}</span>
+                        <span className="font-semibold text-zinc-100">₱{metrics.revenueFromNormalUsers.toFixed(2)}</span>
                       </div>
                     </div>
 
@@ -409,7 +409,7 @@ export default function Admin() {
                                   </p>
                                 </div>
                                 <div className="text-right">
-                                  <p className="font-semibold text-emerald-300">${order.total.toFixed(2)}</p>
+                                  <p className="font-semibold text-emerald-300">₱{order.total.toFixed(2)}</p>
                                   <p className="text-xs text-zinc-500">{itemCount} items sold</p>
                                 </div>
                               </div>
@@ -459,7 +459,7 @@ export default function Admin() {
                             <p className="mt-2 text-sm text-zinc-400 line-clamp-2">{product.description}</p>
                           </div>
                           <div className="flex items-center justify-between gap-3">
-                            <p className="text-lg font-semibold text-emerald-300">${product.price}</p>
+                            <p className="text-lg font-semibold text-emerald-300">₱{product.price}</p>
                             <button
                               onClick={() => handleProductAction(product.id, product.variant === 'active' ? 'archive' : 'restore')}
                               disabled={busyProductId === product.id}
@@ -521,7 +521,7 @@ export default function Admin() {
 
                         <div className="grid gap-4 md:grid-cols-2">
                           <label className="space-y-2 text-sm text-zinc-300">
-                            <span>Base Price ($) *</span>
+                            <span>Base Price (₱) *</span>
                             <input
                               type="number"
                               min="0"
@@ -550,7 +550,7 @@ export default function Admin() {
 
                         {newProductForm.unitType !== 'fixed' && (
                           <label className="space-y-2 text-sm text-zinc-300">
-                            <span>Price per {newProductForm.unitType === 'linear_meter' ? 'meter' : 'unit'} ($)</span>
+                            <span>Price per {newProductForm.unitType === 'linear_meter' ? 'meter' : 'unit'} (₱)</span>
                             <input
                               type="number"
                               min="0"
@@ -837,7 +837,7 @@ export default function Admin() {
                               </p>
                             </div>
                             <div className="text-right">
-                              <p className="font-semibold text-emerald-300">${order.total.toFixed(2)}</p>
+                              <p className="font-semibold text-emerald-300">₱{order.total.toFixed(2)}</p>
                               <p className="text-xs text-zinc-500">{itemCount} items sold</p>
                             </div>
                           </div>

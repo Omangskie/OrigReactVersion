@@ -14,6 +14,14 @@ const SignUp = () => {
     const [error, setError] = useState("");
     const [successMessage, setSuccessMessage] = useState("");
     const [loading, setLoading] = useState(false);
+    const [acceptedTerms, setAcceptedTerms] = useState(false);
+    const [otpStage, setOtpStage] = useState(false);
+    const [otpCode, setOtpCode] = useState("");
+    const [otpError, setOtpError] = useState("");
+    const [otpMessage, setOtpMessage] = useState("");
+    const [otpSending, setOtpSending] = useState(false);
+    const [otpVerifying, setOtpVerifying] = useState(false);
+    const [otpResendCount, setOtpResendCount] = useState(0);
 
     const {session, userProfile, authReady, signUpNewUser, isConfiguredAdminEmail} = useUserAuth();
     const db = getFirestore(app);
@@ -75,13 +83,20 @@ const SignUp = () => {
         }
     }
 
-    const handleSignUp = async (e) => {
+    const handleSendOtp = async (e) => {
         e.preventDefault();
         setError("");
+        setOtpError("");
         setSuccessMessage("");
+        setOtpMessage("");
 
         if (!isPhoneValid) {
             setError("Please enter a valid PH phone number (09XXXXXXXXX, 9XXXXXXXXX, 639XXXXXXXXX, or +639XXXXXXXXX).");
+            return;
+        }
+
+        if (!acceptedTerms) {
+            setError("You must accept the Terms & Conditions and Privacy Policy before signing up.");
             return;
         }
 
@@ -90,8 +105,55 @@ const SignUp = () => {
             return;
         }
 
-        setLoading(true);
+        setOtpSending(true);
         try {
+            const response = await fetch("/api/auth/send-otp", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: email.trim().toLowerCase() }),
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data?.message || "Unable to send verification code. Please try again.");
+            }
+
+            setOtpStage(true);
+            setOtpMessage(data.message || "A verification code was sent to your email.");
+            setOtpError("");
+        } catch (error) {
+            setError(error.message || "Unable to send verification code. Please try again.");
+        } finally {
+            setOtpSending(false);
+        }
+    };
+
+    const handleVerifyOtp = async (e) => {
+        e.preventDefault();
+        setError("");
+        setOtpError("");
+        setSuccessMessage("");
+
+        if (!otpCode || otpCode.trim().length !== 6) {
+            setOtpError("Enter the 6-digit verification code sent to your email.");
+            return;
+        }
+
+        setOtpVerifying(true);
+        try {
+            const response = await fetch("/api/auth/verify-otp", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: email.trim().toLowerCase(), code: otpCode.trim() }),
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data?.message || "Verification failed. Please try again.");
+            }
+
+            setOtpMessage("Verification successful. Creating your account...");
+
             const result = await signUpNewUser(email, password);
             if (result.success) {
                 const uid = result?.data?.user?.uid;
@@ -114,11 +176,48 @@ const SignUp = () => {
                 navigate(result.profile?.role === "admin" ? "/admin" : "/homepage");
                 return;
             }
+
             setError(result.error || "Unable to sign up. Please try again.");
         } catch (error) {
-            setError(error.message);
+            setOtpError(error.message || "Verification failed. Please try again.");
         } finally {
-            setLoading(false);
+            setOtpVerifying(false);
+        }
+    };
+
+    const handleEditDetails = () => {
+        setOtpStage(false);
+        setOtpCode("");
+        setOtpError("");
+        setOtpMessage("");
+        setError("");
+    };
+
+    const handleResendOtp = async () => {
+        setOtpError("");
+        setError("");
+        setOtpMessage("");
+        setOtpSending(true);
+
+        try {
+            const response = await fetch("/api/auth/send-otp", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: email.trim().toLowerCase() }),
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data?.message || "Unable to resend verification code.");
+            }
+
+            setOtpResendCount((count) => count + 1);
+            setOtpMessage(data.message || "Verification code resent to your email.");
+            setOtpError("");
+        } catch (error) {
+            setOtpError(error.message || "Unable to resend verification code.");
+        } finally {
+            setOtpSending(false);
         }
     };
 
@@ -128,6 +227,13 @@ const SignUp = () => {
             .replace(/(?!^)\+/g, "");
 
         setPhone(sanitized);
+    };
+
+    const handleEmailChange = (e) => {
+        if (otpStage) {
+            handleEditDetails();
+        }
+        setEmail(e.target.value);
     };
 
     return (
@@ -165,17 +271,19 @@ const SignUp = () => {
                                     <p className="text-sm uppercase tracking-[0.35em] text-emerald-300">Sign up</p>
                                     <h2 className="mt-4 text-3xl font-bold tracking-tight text-white">Start your Originals journey</h2>
                                 </div>
-                                <form onSubmit={handleSignUp} className="space-y-6">
+                                <form onSubmit={otpStage ? handleVerifyOtp : handleSendOtp} className="space-y-6">
                                     <div className="space-y-3">
                                         <label htmlFor="email" className="block text-sm font-medium text-zinc-300">Email address</label>
                                         <input
                                             id="email"
-                                            onChange={(e) => setEmail(e.target.value)}
+                                            value={email}
+                                            onChange={handleEmailChange}
                                             className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder:text-zinc-500 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
                                             type="email"
                                             required
                                             autoComplete="email"
                                             placeholder="sample@gmail.com"
+                                            disabled={otpStage}
                                         />
                                     </div>
                                     <div className="space-y-3">
@@ -243,15 +351,74 @@ const SignUp = () => {
                                         </ul>
                                         {strengthText && <p className={`mt-3 text-xs font-semibold ${strengthClassName}`}>{strengthText}</p>}
                                     </div>
-                                    <button
-                                        type="submit"
-                                        disabled={loading || !isFormValid}
-                                        className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold uppercase tracking-[0.12em] text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        {loading ? "Please wait..." : "Sign up"}
-                                    </button>
+                                    <label className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-zinc-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={acceptedTerms}
+                                            onChange={(e) => setAcceptedTerms(e.target.checked)}
+                                            className="mt-1 h-4 w-4 rounded border-zinc-600 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
+                                        />
+                                        <span className="leading-6 text-zinc-200">
+                                            I agree to the{' '}
+                                            <a href="/terms" className="font-semibold text-emerald-300 hover:text-emerald-200">Terms & Conditions</a>{' '}
+                                            and{' '}
+                                            <a href="/privacy" className="font-semibold text-emerald-300 hover:text-emerald-200">Privacy Policy</a>.
+                                        </span>
+                                    </label>
+                                    {otpStage ? (
+                                        <>
+                                            <div className="rounded-2xl border border-emerald-500/10 bg-emerald-950/90 p-4 text-sm text-emerald-200">
+                                                <p>
+                                                    {otpMessage || "A verification code has been sent to your email. Enter it below to complete signup."}
+                                                </p>
+                                            </div>
+                                            <div className="space-y-3">
+                                                <label htmlFor="otp" className="block text-sm font-medium text-zinc-300">Verification code</label>
+                                                <input
+                                                    id="otp"
+                                                    value={otpCode}
+                                                    onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ""))}
+                                                    className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder:text-zinc-500 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    maxLength={6}
+                                                    placeholder="123456"
+                                                />
+                                            </div>
+                                            <button
+                                                type="submit"
+                                                disabled={otpVerifying || otpCode.trim().length !== 6}
+                                                className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold uppercase tracking-[0.12em] text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {otpVerifying ? "Verifying..." : "Verify code and sign up"}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={handleResendOtp}
+                                                disabled={otpSending}
+                                                className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {otpSending ? "Resending..." : "Resend code"}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={handleEditDetails}
+                                                className="w-full rounded-2xl border border-zinc-700 bg-zinc-900/80 px-4 py-3 text-sm font-semibold uppercase tracking-[0.12em] text-zinc-100 transition hover:bg-zinc-800"
+                                            >
+                                                Edit signup details
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <button
+                                            type="submit"
+                                            disabled={loading || otpSending || !isFormValid || !acceptedTerms}
+                                            className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold uppercase tracking-[0.12em] text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {otpSending ? "Sending code..." : "Send verification code"}
+                                        </button>
+                                    )}
                                     {successMessage && <p className="text-sm text-emerald-300">{successMessage}</p>}
-                                    {error && <p className="text-sm text-red-400">{error}</p>}
+                                    {(error || otpError) && <p className="text-sm text-red-400">{error || otpError}</p>}
                                 </form>
                                 <p className="mt-8 text-center text-sm text-zinc-400">
                                     Already have an account?{' '}

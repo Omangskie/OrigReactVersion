@@ -74,7 +74,7 @@ export const PRODUCTS = [
   },
   {
     id: "p7",
-    name: "Print and Press",
+    name: "Direct To Film (DTF)",
     price: 100,
     pricingUnit: "each",
     dimensionUnit: "",

@@ -16,6 +16,7 @@ const AdminSignUp = () => {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [registeringAdmin, setRegisteringAdmin] = useState(false);
 
   const {
     authReady,
@@ -34,7 +35,7 @@ const AdminSignUp = () => {
   );
 
   useEffect(() => {
-    if (!authReady || !session) {
+    if (!authReady || !session || loading || registeringAdmin) {
       return;
     }
 
@@ -45,8 +46,11 @@ const AdminSignUp = () => {
     const isAdmin = userProfile?.role === "admin" || isConfiguredAdminEmail(session.email);
     if (isAdmin) {
       navigate("/admin", { replace: true });
+      return;
     }
-  }, [authReady, navigate, session, userProfile, isConfiguredAdminEmail]);
+
+    navigate("/homepage", { replace: true });
+  }, [authReady, loading, registeringAdmin, navigate, session, userProfile, isConfiguredAdminEmail]);
 
   const checks = passwordChecks(password);
   const validPassword = Object.values(checks).every(Boolean);
@@ -68,6 +72,7 @@ const AdminSignUp = () => {
     }
 
     setLoading(true);
+    setRegisteringAdmin(true);
     try {
       const result = await signUpNewUser(email, password, { role: "admin" });
 
@@ -76,11 +81,18 @@ const AdminSignUp = () => {
         return;
       }
 
+      const uid = result?.data?.user?.uid;
+
+      if (uid) {
+        await setUserRole(uid, "admin");
+      }
+
       navigate("/admin", { replace: true });
     } catch (signupError) {
       setError(signupError?.message || "Unable to create admin account.");
     } finally {
       setLoading(false);
+      setRegisteringAdmin(false);
     }
   };
 

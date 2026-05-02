@@ -76,7 +76,7 @@ export const Shop = () => {
                   <h3 className="text-xl font-bold group-hover:text-emerald-400 transition-colors">{product.name}</h3>
                   <p className="text-sm text-zinc-500 mt-1 uppercase tracking-widest">{product.category}</p>
                 </div>
-                <p className="text-lg font-medium">${product.price}</p>
+                <p className="text-lg font-medium">₱{product.price}</p>
               </div>
             </Link>
           </motion.div>
