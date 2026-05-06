@@ -12,6 +12,7 @@ import {
 } from "firebase/auth";
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -283,10 +284,11 @@ export const AuthContextProvider = ({ children }) => {
       const data = await createUserWithEmailAndPassword(auth, email, password);
       await sendEmailVerification(data.user);
       const shouldCreateAdminProfile = options?.role === "admin";
+      const requestedPhone = String(options?.phone || "").trim();
 
       const fallbackProfile = normalizeUserProfile(data.user.uid, data.user, {
         email: data.user.email || email,
-        phone: "",
+        phone: requestedPhone,
         role: shouldCreateAdminProfile ? "admin" : "customer",
         status: "active",
         createdAt: nowIso(),
@@ -300,6 +302,15 @@ export const AuthContextProvider = ({ children }) => {
 
       try {
         profile = shouldCreateAdminProfile ? fallbackProfile : await refreshUserSnapshot(data.user);
+
+        if (requestedPhone && profile?.phone !== requestedPhone) {
+          const phoneUpdates = { phone: requestedPhone, updatedAt: nowIso() };
+          await setDoc(doc(db, "users", data.user.uid), phoneUpdates, { merge: true });
+          profile = normalizeUserProfile(data.user.uid, data.user, {
+            ...profile,
+            ...phoneUpdates,
+          });
+        }
 
         if (!shouldCreateAdminProfile) {
           setUserProfile(profile);
@@ -449,7 +460,41 @@ export const AuthContextProvider = ({ children }) => {
   };
 
   const suspendUser = async (userId) => updateUserProfile(userId, { status: "suspended" });
-  const deleteUser = async (userId) => updateUserProfile(userId, { status: "deleted" });
+  const deleteUser = async (userId, options = {}) => {
+    const hardDelete = options?.hardDelete !== false;
+
+    if (!hardDelete) {
+      return updateUserProfile(userId, { status: "deleted" });
+    }
+
+    const actorToken = await auth.currentUser?.getIdToken();
+
+    if (!actorToken) {
+      throw new Error("No authenticated admin session available.");
+    }
+
+    const response = await fetch("/api/auth/delete-user", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        targetUid: userId,
+        actorToken,
+      }),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(payload?.message || "Unable to delete Firebase Authentication user.");
+    }
+
+    await deleteDoc(doc(db, "users", userId));
+    setUsers((previousUsers) => previousUsers.filter((user) => user.uid !== userId));
+
+    return { success: true };
+  };
   const restoreUser = async (userId) => updateUserProfile(userId, { status: "active" });
   const setUserRole = async (userId, role) => updateUserProfile(userId, { role });
   

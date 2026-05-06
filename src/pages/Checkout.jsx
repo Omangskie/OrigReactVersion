@@ -2,16 +2,15 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import { useStore } from '../context/StoreContext';
-import { CheckCircle, Loader2, Smartphone } from 'lucide-react';
+import { CheckCircle, Smartphone, Upload } from 'lucide-react';
 
 export const Checkout = () => {
-  const { cart, cartTotal, placeOrder } = useStore();
+  const { cart, cartTotal, submitOrderForPaymentReview } = useStore();
   const navigate = useNavigate();
-  const [processing, setProcessing] = useState(false);
+  const [submittingProof, setSubmittingProof] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [orderId, setOrderId] = useState('');
   const [shippingSubmitted, setShippingSubmitted] = useState(false);
-  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
   const [paymentError, setPaymentError] = useState('');
   const [paymentReference, setPaymentReference] = useState('');
   const [paymentIntentId, setPaymentIntentId] = useState('');
@@ -21,6 +20,8 @@ export const Checkout = () => {
   const [paymentQrUrl, setPaymentQrUrl] = useState('');
   const [paymentCheckoutUrl, setPaymentCheckoutUrl] = useState('');
   const [paymentConfigHint, setPaymentConfigHint] = useState('');
+  const [receiptProofImage, setReceiptProofImage] = useState('');
+  const [receiptProofName, setReceiptProofName] = useState('');
   const [contactEmail, setContactEmail] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -110,16 +111,8 @@ export const Checkout = () => {
       setPaymentQrUrl(data.qrImageUrl || '');
       setPaymentCheckoutUrl(data.checkoutUrl || '');
 
-      if (data.paymongoKeyMode === 'test') {
-        setPaymentConfirmed(true);
-        setPaymentStatus('paid');
-        setPaymentMessage('Test mode detected. QR generated and payment auto-confirmed for checkout flow.');
-        setPaymentError('');
-        return;
-      }
-
       setPaymentStatus('waiting');
-      setPaymentMessage('Payment session ready. Scan QR with GCash or open PayMongo checkout.');
+      setPaymentMessage('Payment session ready. Scan the QR, pay, then upload your receipt proof below.');
     } catch (error) {
       setPaymentStatus('failed');
       setPaymentMessage('');
@@ -141,90 +134,91 @@ export const Checkout = () => {
       await createPaymentSession();
       return;
     }
-
-    if (!paymentConfirmed) {
-      setPaymentError('Click Payment Confirmed to place the order.');
-      return;
-    }
   };
 
-  useEffect(() => {
-    if (!shippingSubmitted || paymentConfirmed || !paymentReference || !paymentIntentId) {
+  const handleReceiptUpload = (event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
       return;
     }
 
-    let cancelled = false;
-
-    const verifyPaymentStatus = async () => {
-      try {
-        const response = await fetch(
-          `/api/payments/status/${paymentReference}?paymentIntentId=${encodeURIComponent(paymentIntentId)}`
-        );
-        const data = await parseApiJson(response);
-
-        if (!response.ok) {
-          if (!cancelled && response.status === 404) {
-            setPaymentStatus('waiting');
-            setPaymentMessage('Payment session is still initializing...');
-          }
-
-          if (!cancelled && response.status >= 500) {
-            setPaymentError('Payment API error while checking status. Verify PAYMONGO_SECRET_KEY and npm run api.');
-          }
-          return;
-        }
-
-        if (!cancelled && data?.status === 'paid') {
-          setPaymentConfirmed(true);
-          setPaymentStatus('paid');
-          setPaymentMessage('Payment detected and confirmed by the system.');
-          setPaymentError('');
-          return;
-        }
-
-        if (!cancelled && data?.status === 'expired') {
-          setPaymentStatus('expired');
-          setPaymentMessage('Payment session expired. Please refresh checkout and try again.');
-          setPaymentError('');
-          return;
-        }
-
-        if (!cancelled) {
-          setPaymentStatus('waiting');
-          setPaymentMessage('Waiting for payment confirmation from PayMongo...');
-        }
-      } catch {
-        if (!cancelled) {
-          setPaymentError('Cannot verify payment right now. Ensure API server is running.');
-        }
-      }
-    };
-
-    verifyPaymentStatus();
-    const interval = setInterval(verifyPaymentStatus, 3000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [shippingSubmitted, paymentConfirmed, paymentReference, paymentIntentId]);
-
-  const handlePaymentConfirmed = () => {
-    if (!paymentConfirmed || processing || completed) {
+    if (!file.type.startsWith('image/')) {
+      setPaymentError('Please upload an image file for receipt proof.');
       return;
     }
 
-    setProcessing(true);
+    if (file.size > 4 * 1024 * 1024) {
+      setPaymentError('Receipt image is too large. Upload an image smaller than 4MB.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      setReceiptProofImage(result);
+      setReceiptProofName(file.name);
+      setPaymentError('');
+    };
+
+    reader.onerror = () => {
+      setPaymentError('Unable to read the uploaded receipt. Please try another image.');
+    };
+
+    reader.readAsDataURL(file);
+  };
+
+  const handleSubmitPaymentProof = async () => {
+    if (!shippingSubmitted) {
+      setPaymentError('Complete shipping details and generate a payment session first.');
+      return;
+    }
+
+    if (!paymentReference || !paymentIntentId) {
+      setPaymentError('Payment session is missing. Please try generating payment session again.');
+      return;
+    }
+
+    if (!receiptProofImage) {
+      setPaymentError('Upload a payment receipt proof before submitting your order.');
+      return;
+    }
+
+    setSubmittingProof(true);
     try {
-      const id = placeOrder();
+      const id = await submitOrderForPaymentReview({
+        contact: {
+          email: contactEmail,
+          firstName,
+          lastName,
+        },
+        shipping: {
+          addressLine,
+          city,
+          stateProvince,
+          postalCode,
+        },
+        payment: {
+          reference: paymentReference,
+          paymentIntentId,
+          qrImageUrl: paymentQrUrl,
+          proofImage: receiptProofImage,
+          proofFileName: receiptProofName,
+        },
+      });
+
+      if (!id) {
+        throw new Error('Unable to submit payment proof. Please try again.');
+      }
+
       setOrderId(id);
       setCompleted(true);
       setPaymentError('');
-      setPaymentMessage('Order placed successfully.');
-    } catch {
-      setPaymentError('Unable to complete checkout. Please try again.');
+      setPaymentMessage('Payment proof submitted. Your order is pending admin confirmation.');
+    } catch (error) {
+      setPaymentError(error?.message || 'Unable to submit payment proof. Please try again.');
     } finally {
-      setProcessing(false);
+      setSubmittingProof(false);
     }
   };
 
@@ -257,14 +251,14 @@ export const Checkout = () => {
           initial={{ scale: 0, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ type: 'spring', bounce: 0.5 }}
-          className="text-emerald-500 mb-8"
+          className="text-yellow-500 mb-8"
         >
-          <CheckCircle size={80} />
+          <Smartphone size={80} />
         </motion.div>
         
-        <h1 className="text-4xl md:text-6xl font-bold tracking-tighter uppercase mb-6">Order Placed</h1>
+        <h1 className="text-4xl md:text-6xl font-bold tracking-tighter uppercase mb-6">Pending Admin Approval</h1>
         <p className="text-xl font-light text-zinc-400 mb-2">Order #{orderId}</p>
-        <p className="text-zinc-500 mb-12 max-w-md">Your order has been confirmed. You will receive an email shortly.</p>
+        <p className="text-zinc-500 mb-12 max-w-md">Your payment proof has been submitted. An admin will review and confirm your receipt shortly. Your order will be completed once approved.</p>
         
         <div className="flex flex-col sm:flex-row gap-6">
           <button 
@@ -332,19 +326,6 @@ export const Checkout = () => {
 
                 <button
                   type="button"
-                  onClick={handlePaymentConfirmed}
-                  disabled={!paymentConfirmed || processing || completed}
-                  className="w-full py-3 border border-zinc-700 font-bold uppercase tracking-widest text-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-zinc-50 text-zinc-950 hover:bg-emerald-400"
-                >
-                  {paymentStatus === 'creating' && 'Creating Payment Session'}
-                  {paymentStatus === 'verifying' && 'Checking Payment'}
-                  {paymentStatus === 'paid' && 'Payment Confirmed'}
-                  {paymentStatus === 'expired' && 'Payment Session Expired'}
-                  {(paymentStatus === 'waiting' || paymentStatus === 'idle' || paymentStatus === 'failed') && 'Awaiting Payment Confirmation'}
-                </button>
-
-                <button
-                  type="button"
                   onClick={handleRedirectToGcash}
                   disabled={creatingSession || (!paymentCheckoutUrl && !paymentQrUrl)}
                   className="w-full py-3 border border-zinc-700 text-zinc-100 font-bold uppercase tracking-widest hover:border-emerald-500 hover:text-emerald-400 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -352,10 +333,41 @@ export const Checkout = () => {
                   <Smartphone size={16} />
                   Open Payment
                 </button>
+
+                <label className="w-full py-3 border border-zinc-700 text-zinc-100 font-bold uppercase tracking-widest hover:border-emerald-500 hover:text-emerald-400 transition-colors flex items-center justify-center gap-2 cursor-pointer">
+                  <Upload size={16} />
+                  {receiptProofName ? 'Replace Receipt Proof' : 'Upload Receipt Proof'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleReceiptUpload}
+                    className="hidden"
+                  />
+                </label>
+
+                {receiptProofImage && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-zinc-400 text-center">Uploaded: {receiptProofName || 'Receipt image'}</p>
+                    <img
+                      src={receiptProofImage}
+                      alt="Uploaded payment receipt proof"
+                      className="mx-auto max-h-52 w-auto rounded border border-zinc-800"
+                    />
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleSubmitPaymentProof}
+                  disabled={submittingProof || !shippingSubmitted || !receiptProofImage || !paymentReference || !paymentIntentId}
+                  className="w-full py-3 border border-zinc-700 font-bold uppercase tracking-widest text-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-zinc-50 text-zinc-950 hover:bg-emerald-400"
+                >
+                  {submittingProof ? 'Submitting Proof...' : 'Submit Proof For Admin Review'}
+                </button>
               </div>
 
               {paymentMessage && (
-                <p className={`text-sm ${paymentConfirmed ? 'text-emerald-400' : 'text-zinc-400'}`}>{paymentMessage}</p>
+                <p className="text-sm text-zinc-400">{paymentMessage}</p>
               )}
 
               {paymentError && <p className="text-sm text-red-400">{paymentError}</p>}
@@ -365,17 +377,10 @@ export const Checkout = () => {
 
           <button 
             type="submit" 
-            disabled={processing || shippingSubmitted}
+            disabled={submittingProof || shippingSubmitted}
             className="w-full mt-12 py-5 bg-zinc-50 text-zinc-950 font-bold tracking-widest uppercase hover:bg-emerald-400 transition-colors flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {processing ? (
-              <>
-                <Loader2 className="animate-spin" size={20} />
-                Processing...
-              </>
-            ) : (
-              shippingSubmitted ? (creatingSession ? 'Preparing Payment Session...' : 'Waiting for Payment Confirmation') : 'Continue to Payment'
-            )}
+            {shippingSubmitted ? (creatingSession ? 'Preparing Payment Session...' : 'Payment Session Ready') : 'Continue to Payment'}
           </button>
         </form>
       </div>

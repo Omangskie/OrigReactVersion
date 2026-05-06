@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
+import { allowedAdminEmails, getFirebaseAdmin } from './firebaseAdmin.js';
 
 dotenv.config();
 
@@ -12,10 +13,15 @@ const paymongoSecretKey = process.env.PAYMONGO_SECRET_KEY?.trim();
 
 app.use(cors());
 app.use(express.json({
+  // Allow larger JSON payloads because the client sends base64 data URLs for images.
+  limit: '10mb',
   verify: (req, _res, buf) => {
     req.rawBody = buf.toString('utf8');
   },
 }));
+
+// Also accept larger URL-encoded bodies if ever used by forms.
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 const paymongoBaseUrl = 'https://api.paymongo.com/v1';
 const paymongoKeyMode = paymongoSecretKey?.startsWith('sk_live_') ? 'live' : paymongoSecretKey?.startsWith('sk_test_') ? 'test' : 'unknown';
@@ -30,6 +36,19 @@ const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL?.trim() || 'noreply@or
 
 const normalizeEmail = (value) => typeof value === 'string' ? value.trim().toLowerCase() : '';
 const generateOtpCode = () => Math.floor(100000 + Math.random() * 900000).toString();
+const isActiveAdmin = (profile = {}) => profile.role === 'admin' && profile.status !== 'deleted' && profile.status !== 'suspended';
+const maskEmail = (email) => {
+  const [local, domain] = String(email || '').split('@');
+  if (!local || !domain) {
+    return 'your email';
+  }
+
+  if (local.length <= 2) {
+    return `${local[0] || '*'}*@${domain}`;
+  }
+
+  return `${local.slice(0, 2)}${'*'.repeat(Math.max(local.length - 2, 1))}@${domain}`;
+};
 
 const sendBrevoOtpEmail = async (email, code) => {
   if (!BREVO_API_KEY) {
@@ -56,7 +75,10 @@ const sendBrevoOtpEmail = async (email, code) => {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Brevo request failed: ${response.status} ${body}`);
+    const error = new Error(`Brevo request failed: ${response.status} ${body}`);
+    error.status = response.status;
+    error.details = body;
+    throw error;
   }
 
   return response.json();
@@ -216,6 +238,52 @@ const mapPaymentIntentStatus = (status) => {
   return 'waiting';
 };
 
+const createOrderId = () => `ORD-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
+
+const parseDataUrl = (dataUrl) => {
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/i.exec(dataUrl || '');
+
+  if (!match) {
+    throw new Error('Invalid receipt proof image.');
+  }
+
+  return {
+    contentType: match[1],
+    buffer: Buffer.from(match[2], 'base64'),
+  };
+};
+
+const uploadPaymentProof = async ({ storage, purchaserUid, orderId, fileName, proofImage }) => {
+  if (!proofImage) {
+    return { proofImageUrl: '', proofStoragePath: '' };
+  }
+
+  if (!proofImage.startsWith('data:image/')) {
+    return { proofImageUrl: proofImage, proofStoragePath: '' };
+  }
+
+  const safeFileName = String(fileName || 'receipt-proof').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const proofStoragePath = `order-receipts/${purchaserUid}/${orderId}/${Date.now()}-${safeFileName}`;
+  const { buffer, contentType } = parseDataUrl(proofImage);
+  const receiptFile = storage.bucket().file(proofStoragePath);
+  const downloadToken = crypto.randomUUID();
+
+  await receiptFile.save(buffer, {
+    resumable: false,
+    metadata: {
+      contentType,
+      metadata: {
+        firebaseStorageDownloadTokens: downloadToken,
+      },
+    },
+  });
+
+  return {
+    proofImageUrl: `https://firebasestorage.googleapis.com/v0/b/${storage.bucket().name}/o/${encodeURIComponent(proofStoragePath)}?alt=media&token=${downloadToken}`,
+    proofStoragePath,
+  };
+};
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
@@ -234,20 +302,30 @@ app.post('/api/auth/send-otp', async (req, res) => {
     return res.status(400).json({ message: 'Please provide a valid email address.' });
   }
 
-  if (!BREVO_API_KEY) {
-    return res.status(500).json({ message: 'BREVO_API_KEY is not configured on the server.' });
-  }
-
   const code = generateOtpCode();
   const expiresAt = Date.now() + OTP_TTL_MS;
   otpStore.set(email, { code, expiresAt, attemptsLeft: MAX_OTP_ATTEMPTS });
 
+  if (!BREVO_API_KEY) {
+    otpStore.delete(email);
+    return res.status(500).json({ message: 'BREVO_API_KEY is not configured on the server.' });
+  }
+
   try {
     await sendBrevoOtpEmail(email, code);
-    return res.json({ ok: true, message: 'Verification code sent to your email.' });
+    return res.json({ ok: true, message: `Verification code sent to ${maskEmail(email)}.` });
   } catch (error) {
     console.error('Brevo OTP send error:', error);
     otpStore.delete(email);
+
+    if (error?.status === 401) {
+      return res.status(503).json({
+        message:
+          'Brevo rejected the API key with 401 Unauthorized. In Brevo, enable API keys for API usage or switch this flow to SMTP delivery.',
+        details: error?.details || error?.message || null,
+      });
+    }
+
     return res.status(500).json({ message: error?.message || 'Failed to send verification code.' });
   }
 });
@@ -283,6 +361,41 @@ app.post('/api/auth/verify-otp', (req, res) => {
 
   otpStore.delete(email);
   return res.json({ ok: true, message: 'Verification succeeded.' });
+});
+
+app.post('/api/auth/delete-user', async (req, res) => {
+  try {
+    const targetUid = String(req.body?.targetUid || '').trim();
+    const actorToken = String(req.body?.actorToken || '').trim();
+
+    if (!targetUid || !actorToken) {
+      return res.status(400).json({ message: 'targetUid and actorToken are required.' });
+    }
+
+    const { auth: adminAuth, db: adminDb } = getFirebaseAdmin();
+    const decoded = await adminAuth.verifyIdToken(actorToken);
+    const actorProfileSnapshot = await adminDb.collection('users').doc(decoded.uid).get();
+    const actorProfile = actorProfileSnapshot.exists ? actorProfileSnapshot.data() : null;
+    const actorEmail = normalizeEmail(decoded.email || '');
+    const canDeleteUser = isActiveAdmin(actorProfile) || allowedAdminEmails.includes(actorEmail);
+
+    if (!canDeleteUser) {
+      return res.status(403).json({ message: 'Only active admins can delete user accounts.' });
+    }
+
+    if (decoded.uid === targetUid) {
+      return res.status(400).json({ message: 'Admins cannot delete their own account from this endpoint.' });
+    }
+
+    await adminAuth.deleteUser(targetUid);
+    return res.status(200).json({ ok: true, deletedUid: targetUid });
+  } catch (error) {
+    if (error?.code === 'auth/user-not-found') {
+      return res.status(200).json({ ok: true, alreadyDeleted: true });
+    }
+
+    return res.status(500).json({ message: error?.message || 'Failed to delete Firebase Authentication user.' });
+  }
 });
 
 app.post('/api/payments/webhook', async (req, res) => {
@@ -432,6 +545,92 @@ app.post('/api/payments/session', async (req, res) => {
     res.status(statusCode).json({
       message: error?.message || 'Unable to create payment session.',
       hint: 'Check PAYMONGO_SECRET_KEY and the API logs. Restart with npm run api after updating .env.',
+    });
+  }
+});
+
+app.post('/api/orders/payment-review', async (req, res) => {
+  try {
+    const actorToken = String(req.body?.actorToken || '').trim();
+
+    if (!actorToken) {
+      return res.status(401).json({ message: 'You must be signed in to submit payment proof.' });
+    }
+
+    const { auth: adminAuth, db: adminDb, storage } = getFirebaseAdmin();
+    const decoded = await adminAuth.verifyIdToken(actorToken);
+
+    const cart = Array.isArray(req.body?.cart) ? req.body.cart : [];
+    const computedTotal = computeAmountFromCart(cart);
+    const requestedTotal = Number(req.body?.total);
+    const total = computedTotal > 0 ? computedTotal : requestedTotal;
+
+    if (!Number.isFinite(total) || total <= 0) {
+      return res.status(400).json({ message: 'Order total must be a positive number.' });
+    }
+
+    if (cart.length === 0) {
+      return res.status(400).json({ message: 'Cart is empty.' });
+    }
+
+    const now = new Date();
+    const orderId = createOrderId();
+    const shipping = req.body?.shipping && typeof req.body.shipping === 'object' ? req.body.shipping : {};
+    const contact = req.body?.contact && typeof req.body.contact === 'object' ? req.body.contact : {};
+    const payment = req.body?.payment && typeof req.body.payment === 'object' ? req.body.payment : {};
+
+    const { proofImageUrl, proofStoragePath } = await uploadPaymentProof({
+      storage,
+      purchaserUid: decoded.uid,
+      orderId,
+      fileName: payment.proofFileName,
+      proofImage: payment.proofImage,
+    });
+
+    const newOrder = {
+      id: orderId,
+      items: cart,
+      total,
+      status: 'Pending Payment Approval',
+      date: now.toISOString(),
+      estimatedDelivery: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+      purchaserRole: 'customer',
+      purchaserEmail: decoded.email || contact.email || '',
+      purchaserUid: decoded.uid,
+      shipping: {
+        firstName: contact.firstName || '',
+        lastName: contact.lastName || '',
+        email: contact.email || decoded.email || '',
+        addressLine: shipping.addressLine || '',
+        city: shipping.city || '',
+        stateProvince: shipping.stateProvince || '',
+        postalCode: shipping.postalCode || '',
+      },
+      payment: {
+        provider: 'paymongo',
+        method: 'qrph',
+        status: 'pending_review',
+        reference: payment.reference || '',
+        paymentIntentId: payment.paymentIntentId || '',
+        qrImageUrl: payment.qrImageUrl || '',
+        proofImage: proofImageUrl,
+        proofStoragePath,
+        proofFileName: payment.proofFileName || '',
+        submittedAt: now.toISOString(),
+      },
+    };
+
+    await adminDb.collection('orders').doc(orderId).set(newOrder);
+
+    return res.status(200).json({
+      ok: true,
+      orderId,
+      proofImageUrl,
+    });
+  } catch (error) {
+    const statusCode = error?.code === 'auth/id-token-expired' || error?.code === 'auth/argument-error' ? 401 : 500;
+    return res.status(statusCode).json({
+      message: error?.message || 'Unable to submit payment proof.',
     });
   }
 });

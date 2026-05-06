@@ -2,16 +2,19 @@
 import { createContext, useEffect, useState, useContext } from 'react';
 import { PRODUCTS } from '../data/products';
 import { useUserAuth } from '../auth/AuthContext';
+import { app } from '../config/FirebaseConfig';
+import { addDoc, collection, doc, getFirestore, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
+import { getDownloadURL, getStorage, ref, uploadBytes } from 'firebase/storage';
 
 const StoreContext = createContext(undefined);
 
 const CATALOG_STORAGE_KEY = 'theoriginals.catalog';
-const ORDERS_STORAGE_KEY = 'theoriginals.orders';
 const CART_STORAGE_KEY = 'theoriginals.cart';
 
 const getCartItemKey = (productId, size) => `${productId}::${size || 'default'}`;
 
-const ORDER_STATUS_STEPS = ['Processing', 'Shipped', 'Delivered', 'Complete'];
+const ORDER_STATUS_STEPS = ['Pending Payment Approval', 'Processing', 'Shipped', 'Delivered', 'Complete', 'Payment Rejected'];
 
 const createInitialCatalog = () => {
   if (typeof window === 'undefined') {
@@ -85,21 +88,6 @@ const createInitialCatalog = () => {
   }
 };
 
-const createInitialOrders = () => {
-  if (typeof window === 'undefined') {
-    return [];
-  }
-
-  try {
-    const storedOrders = window.localStorage.getItem(ORDERS_STORAGE_KEY);
-    const parsedOrders = storedOrders ? JSON.parse(storedOrders) : [];
-    return Array.isArray(parsedOrders) ? parsedOrders : [];
-  } catch (error) {
-    console.error('Unable to load order history:', error);
-    return [];
-  }
-};
-
 const createInitialCart = () => {
   if (typeof window === 'undefined') {
     return [];
@@ -117,9 +105,12 @@ const createInitialCart = () => {
 
 export const StoreProvider = ({ children }) => {
   const [cart, setCart] = useState(createInitialCart);
-  const [orders, setOrders] = useState(createInitialOrders);
+  const [orders, setOrders] = useState([]);
   const [catalog, setCatalog] = useState(createInitialCatalog);
   const { userProfile, session, authReady } = useUserAuth();
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+  const storage = getStorage(app);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -134,19 +125,43 @@ export const StoreProvider = ({ children }) => {
       return;
     }
 
-    window.localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(orders));
-  }, [orders]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
     window.localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
   }, [cart]);
 
   const activeProducts = catalog.filter((product) => !product.isArchived);
   const archivedProducts = catalog.filter((product) => product.isArchived);
+
+  useEffect(() => {
+    if (!authReady) {
+      return undefined;
+    }
+
+    if (!session?.uid) {
+      setOrders([]);
+      return undefined;
+    }
+
+    const ordersCollection = collection(db, 'orders');
+    const isAdmin = userProfile?.role === 'admin';
+    const ordersQuery = isAdmin
+      ? query(ordersCollection)
+      : query(ordersCollection, where('purchaserUid', '==', session.uid));
+
+    const unsubscribe = onSnapshot(
+      ordersQuery,
+      (snapshot) => {
+        const nextOrders = snapshot.docs
+          .map((entry) => ({ firestoreId: entry.id, ...entry.data() }))
+          .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+        setOrders(nextOrders);
+      },
+      (error) => {
+        console.error('Unable to sync orders from Firestore:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [authReady, db, session?.uid, userProfile?.role]);
 
   const addToCart = (product) => {
     if (authReady && !session) {
@@ -256,34 +271,235 @@ export const StoreProvider = ({ children }) => {
     );
   };
 
-  const placeOrder = () => {
-    if (cart.length === 0) return '';
-    
+  const createOrderId = () => `ORD-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
+
+  const compressReceiptImage = async (file) => {
+    if (typeof window === 'undefined') {
+      return '';
+    }
+
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+      reader.onerror = () => reject(new Error('Unable to read the uploaded receipt.'));
+      reader.readAsDataURL(file);
+    });
+
+    if (!dataUrl) {
+      return '';
+    }
+
+    const image = await new Promise((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error('Unable to load the uploaded receipt image.'));
+      element.src = dataUrl;
+    });
+
+    const maxWidth = 1400;
+    const maxHeight = 1400;
+    let { width, height } = image;
+    const scale = Math.min(maxWidth / width, maxHeight / height, 1);
+    width = Math.max(1, Math.round(width * scale));
+    height = Math.max(1, Math.round(height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return dataUrl;
+    }
+
+    context.drawImage(image, 0, 0, width, height);
+    return canvas.toDataURL('image/jpeg', 0.85);
+  };
+
+  const uploadPaymentProof = async ({ purchaserUid, orderId, fileName, proofImage }) => {
+    if (!proofImage) {
+      return '';
+    }
+
+    if (!proofImage.startsWith('data:image/')) {
+      return proofImage;
+    }
+
+    const safeFileName = String(fileName || 'receipt-proof').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const receiptRef = ref(storage, `order-receipts/${purchaserUid}/${orderId}/${Date.now()}-${safeFileName}`);
+    const proofBlob = await (await fetch(proofImage)).blob();
+
+    await uploadBytes(receiptRef, proofBlob, {
+      contentType: proofBlob.type || 'image/jpeg',
+    });
+
+    return getDownloadURL(receiptRef);
+  };
+
+  const placeOrder = async () => {
+    if (cart.length === 0 || !session?.uid) {
+      return '';
+    }
+
+    const now = new Date();
     const newOrder = {
-      id: `ORD-${Math.random().toString(36).substring(2, 9).toUpperCase()}`,
+      id: createOrderId(),
       items: [...cart],
       total: cartTotal,
       status: 'Processing',
-      date: new Date().toISOString(),
-      estimatedDelivery: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+      date: now.toISOString(),
+      estimatedDelivery: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString(),
       purchaserRole: userProfile?.role || 'customer',
       purchaserEmail: userProfile?.email || '',
+      purchaserUid: session.uid,
+      payment: {
+        status: 'approved',
+      },
     };
-    
-    setOrders((prev) => [newOrder, ...prev]);
+
+    await addDoc(collection(db, 'orders'), newOrder);
     clearCart();
 
     return newOrder.id;
   };
 
-  const updateOrderStatus = (orderId, nextStatus) => {
-    if (!ORDER_STATUS_STEPS.includes(nextStatus)) {
-      return;
+  const submitOrderForPaymentReview = async ({
+    shipping = {},
+    contact = {},
+    payment = {},
+  } = {}) => {
+    if (cart.length === 0 || !session?.uid) {
+      return '';
+    }
+    const now = new Date();
+    const orderId = createOrderId();
+    const proofImageUrl = await uploadPaymentProof({
+      purchaserUid: session.uid,
+      orderId,
+      fileName: payment.proofFileName,
+      proofImage: payment.proofImage,
+    });
+
+    const newOrder = {
+      id: orderId,
+      items: [...cart],
+      total: cartTotal,
+      status: 'Pending Payment Approval',
+      date: now.toISOString(),
+      estimatedDelivery: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+      purchaserRole: userProfile?.role || 'customer',
+      purchaserEmail: userProfile?.email || contact.email || '',
+      purchaserUid: session.uid,
+      shipping: {
+        firstName: contact.firstName || '',
+        lastName: contact.lastName || '',
+        email: contact.email || userProfile?.email || '',
+        addressLine: shipping.addressLine || '',
+        city: shipping.city || '',
+        stateProvince: shipping.stateProvince || '',
+        postalCode: shipping.postalCode || '',
+      },
+      payment: {
+        provider: 'paymongo',
+        method: 'qrph',
+        status: 'pending_review',
+        reference: payment.reference || '',
+        paymentIntentId: payment.paymentIntentId || '',
+        qrImageUrl: payment.qrImageUrl || '',
+        proofImage: proofImageUrl,
+        proofFileName: payment.proofFileName || '',
+        submittedAt: now.toISOString(),
+      },
+    };
+
+    await addDoc(collection(db, 'orders'), newOrder);
+    clearCart();
+    return orderId;
+  };
+
+  const approveOrderPayment = async (orderId) => {
+    const order = orders.find((entry) => entry.id === orderId);
+    if (!order?.firestoreId) {
+      return false;
     }
 
-    setOrders((prev) =>
-      prev.map((order) => (order.id === orderId ? { ...order, status: nextStatus } : order))
-    );
+    const reviewedAt = new Date().toISOString();
+    const nextStatus = order.status === 'Pending Payment Approval' ? 'Processing' : order.status;
+
+    try {
+      await updateDoc(doc(db, 'orders', order.firestoreId), {
+        status: nextStatus,
+        payment: {
+          ...(order.payment || {}),
+          status: 'approved',
+          reviewedAt,
+        },
+      });
+
+      setOrders((prev) =>
+        prev.map((o) => (o.id === orderId ? { ...o, status: nextStatus, payment: { ...(o.payment || {}), status: 'approved', reviewedAt } } : o))
+      );
+
+      return true;
+    } catch (err) {
+      console.error('approveOrderPayment failed:', err);
+      return false;
+    }
+  };
+
+  const rejectOrderPayment = async (orderId, reason = '') => {
+    const order = orders.find((entry) => entry.id === orderId);
+    if (!order?.firestoreId) {
+      return false;
+    }
+
+    const reviewedAt = new Date().toISOString();
+
+    try {
+      await updateDoc(doc(db, 'orders', order.firestoreId), {
+        status: 'Payment Rejected',
+        payment: {
+          ...(order.payment || {}),
+          status: 'rejected',
+          reviewedAt,
+          rejectionReason: reason,
+        },
+      });
+
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === orderId
+            ? { ...o, status: 'Payment Rejected', payment: { ...(o.payment || {}), status: 'rejected', reviewedAt, rejectionReason: reason } }
+            : o
+        )
+      );
+
+      return true;
+    } catch (err) {
+      console.error('rejectOrderPayment failed:', err);
+      return false;
+    }
+  };
+
+  const updateOrderStatus = async (orderId, nextStatus) => {
+    if (!ORDER_STATUS_STEPS.includes(nextStatus)) {
+      return false;
+    }
+    const order = orders.find((entry) => entry.id === orderId);
+    if (!order?.firestoreId) {
+      return false;
+    }
+
+    try {
+      await updateDoc(doc(db, 'orders', order.firestoreId), { status: nextStatus });
+
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: nextStatus } : o)));
+
+      return true;
+    } catch (err) {
+      console.error('updateOrderStatus failed:', err);
+      return false;
+    }
   };
 
   return (
@@ -309,6 +525,9 @@ export const StoreProvider = ({ children }) => {
         getCartItemKey,
         orders,
         placeOrder,
+        submitOrderForPaymentReview,
+        approveOrderPayment,
+        rejectOrderPayment,
         updateOrderStatus,
       }}
     >

@@ -1,18 +1,32 @@
 import { useEffect, useMemo, useState } from 'react';
 // eslint-disable-next-line no-unused-vars
 import { motion } from 'motion/react';
-import { ArchiveRestore, BarChart3, ShieldCheck, ShoppingBag, Users, UserRoundCog, Upload, DollarSign, Plus } from 'lucide-react';
+import { ArchiveRestore, BarChart3, ShieldCheck, ShoppingBag, Users, UserRoundCog, Upload, DollarSign, Plus, Download, CircleCheckBig, CircleX } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { useUserAuth } from '../auth/AuthContext';
 import { useStore } from '../context/StoreContext';
 import PricingForm from '../components/admin/PricingForm';
 
 export default function Admin() {
   const { session, userProfile, users, signOut, suspendUser, deleteUser, restoreUser, setUserRole } = useUserAuth();
-  const { activeProducts, archivedProducts, archiveProduct, restoreProduct, updateProduct, addProduct, orders, updateOrderStatus } = useStore();
+  const {
+    activeProducts,
+    archivedProducts,
+    archiveProduct,
+    restoreProduct,
+    updateProduct,
+    addProduct,
+    orders,
+    updateOrderStatus,
+    approveOrderPayment,
+    rejectOrderPayment,
+  } = useStore();
   const [busyUserId, setBusyUserId] = useState('');
   const [busyProductId, setBusyProductId] = useState('');
   const [busyOrderId, setBusyOrderId] = useState('');
+  const [orderStatusDrafts, setOrderStatusDrafts] = useState({});
   const [selectedProductId, setSelectedProductId] = useState('');
   const [productForm, setProductForm] = useState({
     name: '',
@@ -35,7 +49,12 @@ export default function Admin() {
     pricePerUnit: '',
   });
   const [newProductMessage, setNewProductMessage] = useState('');
+  const [userMessage, setUserMessage] = useState('');
+  const [salesMessage, setSalesMessage] = useState('');
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [paymentApprovalDrafts, setPaymentApprovalDrafts] = useState({});
+
+  const customerUsers = useMemo(() => users.filter((user) => user.role === 'customer'), [users]);
 
   useEffect(() => {
     if (activeProducts.length === 0) {
@@ -47,6 +66,30 @@ export default function Admin() {
       setSelectedProductId(activeProducts[0].id);
     }
   }, [activeProducts, selectedProductId]);
+
+  useEffect(() => {
+    setOrderStatusDrafts((previousDrafts) => {
+      const nextDrafts = {};
+
+      orders.forEach((order) => {
+        nextDrafts[order.id] = previousDrafts[order.id] ?? order.status;
+      });
+
+      return nextDrafts;
+    });
+  }, [orders]);
+
+  useEffect(() => {
+    setPaymentApprovalDrafts((previousDrafts) => {
+      const nextDrafts = {};
+
+      orders.forEach((order) => {
+        nextDrafts[order.id] = previousDrafts[order.id] ?? false;
+      });
+
+      return nextDrafts;
+    });
+  }, [orders]);
 
   useEffect(() => {
     const product = activeProducts.find((entry) => entry.id === selectedProductId);
@@ -73,12 +116,16 @@ export default function Admin() {
   }, [activeProducts, selectedProductId]);
 
   const metrics = useMemo(() => {
+    const approvedOrders = orders.filter((order) => {
+      const paymentStatus = order.payment?.status;
+      return !paymentStatus || paymentStatus === 'approved';
+    });
     const activeUsers = users.filter((user) => user.status === 'active').length;
     const suspendedUsers = users.filter((user) => user.status === 'suspended').length;
     const deletedUsers = users.filter((user) => user.status === 'deleted').length;
     const collaborators = users.filter((user) => user.role === 'collaborator' && user.status === 'active').length;
-    const soldItems = orders.reduce((sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.quantity, 0), 0);
-    const revenueFromNormalUsers = orders
+    const soldItems = approvedOrders.reduce((sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.quantity, 0), 0);
+    const revenueFromNormalUsers = approvedOrders
       .filter((order) => order.purchaserRole !== 'admin')
       .reduce((sum, order) => sum + order.total, 0);
     const categoryTotals = activeProducts.reduce((accumulator, product) => {
@@ -95,6 +142,7 @@ export default function Admin() {
       soldItems,
       revenueFromNormalUsers,
       categoryTotals,
+      approvedOrders,
     };
   }, [activeProducts, orders, users]);
 
@@ -114,6 +162,7 @@ export default function Admin() {
   };
 
   const handleUserAction = async (userId, action) => {
+    setUserMessage('');
     setBusyUserId(userId);
     try {
       if (action === 'suspend') {
@@ -121,7 +170,7 @@ export default function Admin() {
       }
 
       if (action === 'delete') {
-        await deleteUser(userId);
+        await deleteUser(userId, { hardDelete: true });
       }
 
       if (action === 'restore') {
@@ -135,18 +184,155 @@ export default function Admin() {
       if (action === 'customer') {
         await setUserRole(userId, 'customer');
       }
+    } catch (error) {
+      setUserMessage(error?.message || 'Unable to complete user action.');
+      window.setTimeout(() => setUserMessage(''), 3500);
     } finally {
       setBusyUserId('');
     }
   };
 
-  const handleOrderStatusChange = (orderId, status) => {
+  const handleOrderStatusDraftChange = (orderId, status) => {
+    setOrderStatusDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [orderId]: status,
+    }));
+  };
+
+  const handleOrderStatusSave = async (orderId) => {
+    const order = orders.find((entry) => entry.id === orderId);
+
+    if (!order) {
+      return;
+    }
+
+    const nextStatus = orderStatusDrafts[orderId] ?? order.status;
+    const isPendingPaymentReview = order.payment?.status === 'pending_review' || order.status === 'Pending Payment Approval';
+    const isPaymentApprovalArmed = Boolean(paymentApprovalDrafts[orderId]);
+
+    if (nextStatus === order.status && !isPendingPaymentReview) {
+      return;
+    }
+
+    setSalesMessage('');
     setBusyOrderId(orderId);
     try {
-      updateOrderStatus(orderId, status);
+      if (isPendingPaymentReview) {
+        if (!isPaymentApprovalArmed) {
+          setSalesMessage('Click Approve Payment first, then Save to confirm approval.');
+          return;
+        }
+
+        const approved = await approveOrderPayment(orderId);
+        if (!approved) {
+          setSalesMessage('Unable to approve payment for this order.');
+          return;
+        }
+
+        setPaymentApprovalDrafts((currentDrafts) => ({
+          ...currentDrafts,
+          [orderId]: false,
+        }));
+
+        setSalesMessage('Payment approved.');
+
+        if (nextStatus && nextStatus !== 'Pending Payment Approval' && nextStatus !== 'Processing') {
+          const updated = await updateOrderStatus(orderId, nextStatus);
+          if (!updated) {
+            setSalesMessage('Payment approved, but unable to update tracking status for this order.');
+          }
+        }
+
+        return;
+      }
+
+      const ok = await updateOrderStatus(orderId, nextStatus);
+      if (!ok) {
+        setSalesMessage('Unable to update tracking status for this order.');
+      }
+    } catch (error) {
+      setSalesMessage(error?.message || 'Unable to update tracking status for this order.');
     } finally {
       setBusyOrderId('');
     }
+  };
+
+  const handleApprovePayment = async (orderId) => {
+    setSalesMessage('');
+    setPaymentApprovalDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [orderId]: true,
+    }));
+    setSalesMessage('Payment approval selected. Click Save to confirm.');
+  };
+
+  const handleRejectPayment = async (orderId) => {
+    setSalesMessage('');
+    setBusyOrderId(orderId);
+    try {
+      const ok = await rejectOrderPayment(orderId, 'Receipt proof needs verification.');
+      if (!ok) {
+        setSalesMessage('Unable to reject payment for this order.');
+      }
+    } catch (error) {
+      setSalesMessage(error?.message || 'Unable to reject payment for this order.');
+    } finally {
+      setBusyOrderId('');
+    }
+  };
+
+  const handleDownloadSalesReport = () => {
+    const reportOrders = orders.filter((order) => {
+      const paymentStatus = order.payment?.status;
+      return !paymentStatus || paymentStatus === 'approved';
+    });
+
+    if (reportOrders.length === 0) {
+      setSalesMessage('No approved sales yet. Approve receipt proofs first before exporting PDF.');
+      return;
+    }
+
+    const doc = new jsPDF();
+    const now = new Date();
+    const totalRevenue = reportOrders.reduce((sum, order) => sum + Number(order.total || 0), 0);
+
+    doc.setFontSize(16);
+    doc.text('Originals Printing - Sales Report', 14, 18);
+    doc.setFontSize(10);
+    doc.text(`Generated: ${now.toLocaleString()}`, 14, 24);
+    doc.text(`Approved Orders: ${reportOrders.length}`, 14, 30);
+    doc.text(`Total Revenue: PHP ${totalRevenue.toFixed(2)}`, 14, 36);
+
+    const rows = reportOrders.map((order) => {
+      const quantity = order.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+      const paymentRef = order.payment?.reference || '-';
+      return [
+        order.id,
+        order.purchaserEmail || 'Unknown buyer',
+        String(quantity),
+        `PHP ${Number(order.total || 0).toFixed(2)}`,
+        order.status,
+        paymentRef,
+        new Date(order.date).toLocaleDateString(),
+      ];
+    });
+
+    autoTable(doc, {
+      startY: 42,
+      head: [['Order ID', 'Customer', 'Items', 'Total', 'Status', 'Payment Ref', 'Date']],
+      body: rows,
+      styles: {
+        fontSize: 8,
+        cellPadding: 2,
+      },
+      headStyles: {
+        fillColor: [16, 185, 129],
+        textColor: [10, 10, 10],
+      },
+    });
+
+    doc.save(`sales-report-${now.toISOString().slice(0, 10)}.pdf`);
+    setSalesMessage('Sales report PDF downloaded successfully.');
   };
 
   const handleProductUpload = (event) => {
@@ -758,7 +944,7 @@ export default function Admin() {
                 </div>
 
                 <div className="space-y-4 max-h-136 overflow-auto pr-1">
-                  {users.map((user) => (
+                  {customerUsers.map((user) => (
                     <div key={user.uid} className="rounded-3xl border border-white/10 bg-white/5 p-4">
                       <div className="flex items-start justify-between gap-4">
                         <div>
@@ -775,13 +961,6 @@ export default function Admin() {
                       </div>
 
                       <div className="mt-4 flex flex-wrap gap-2">
-                        <button
-                          onClick={() => handleUserAction(user.uid, user.role === 'collaborator' ? 'customer' : 'collaborator')}
-                          disabled={busyUserId === user.uid || user.uid === session.uid}
-                          className="rounded-full border border-white/10 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.3em] text-zinc-200 hover:border-emerald-400 hover:text-emerald-300 disabled:opacity-50"
-                        >
-                          {user.role === 'collaborator' ? 'Demote' : 'Make collaborator'}
-                        </button>
                         {user.status === 'active' ? (
                           <>
                             <button
@@ -812,9 +991,15 @@ export default function Admin() {
                     </div>
                   ))}
 
-                  {users.length === 0 && (
+                  {userMessage && (
+                    <p className="rounded-2xl border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
+                      {userMessage}
+                    </p>
+                  )}
+
+                  {customerUsers.length === 0 && (
                     <div className="rounded-3xl border border-dashed border-white/10 p-8 text-center text-zinc-500">
-                      No user records are available yet.
+                      No customer accounts are available.
                     </div>
                   )}
                 </div>
@@ -823,9 +1008,19 @@ export default function Admin() {
 
             {activeTab === 'sales' && (
               <div className="rounded-4xl border border-white/10 bg-slate-950/80 p-6 md:p-8">
-                <div className="flex items-center gap-3 mb-6">
-                  <BarChart3 size={20} className="text-emerald-300" />
-                  <h2 className="text-2xl font-black uppercase tracking-tight">Recent sales</h2>
+                <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <BarChart3 size={20} className="text-emerald-300" />
+                    <h2 className="text-2xl font-black uppercase tracking-tight">Recent sales</h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDownloadSalesReport}
+                    className="rounded-2xl border border-emerald-400/40 px-4 py-2 text-xs font-bold uppercase tracking-[0.25em] text-emerald-200 hover:border-emerald-300 hover:text-emerald-100 flex items-center gap-2"
+                  >
+                    <Download size={14} />
+                    Download PDF
+                  </button>
                 </div>
 
                 <div className="space-y-3 max-h-96 overflow-auto pr-1">
@@ -836,6 +1031,9 @@ export default function Admin() {
                   ) : (
                     orders.map((order) => {
                       const itemCount = order.items.reduce((sum, item) => sum + item.quantity, 0);
+                      const isPendingPayment = order.payment?.status === 'pending_review' || order.status === 'Pending Payment Approval';
+                      const isApprovedPayment = order.payment?.status === 'approved' || !order.payment;
+                      const receiptProofImage = order.payment?.proofImage || '';
 
                       return (
                         <div key={order.id} className="rounded-3xl border border-white/10 bg-white/5 p-4 text-sm">
@@ -853,6 +1051,48 @@ export default function Admin() {
                               </div>
                             </div>
 
+                            {receiptProofImage && (
+                              <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-3 space-y-3">
+                                <p className="text-xs uppercase tracking-[0.35em] text-zinc-400">Payment receipt proof</p>
+                                <a
+                                  href={receiptProofImage}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-xs text-emerald-300 hover:text-emerald-200 underline"
+                                >
+                                  View full receipt image
+                                </a>
+                                <img
+                                  src={receiptProofImage}
+                                  alt={`Receipt proof for order ${order.id}`}
+                                  className="max-h-60 w-auto rounded border border-white/10"
+                                />
+                              </div>
+                            )}
+
+                            {isPendingPayment && (
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleApprovePayment(order.id)}
+                                  disabled={busyOrderId === order.id}
+                                  className="rounded-2xl border border-emerald-400/40 px-4 py-3 text-xs font-bold uppercase tracking-[0.25em] text-emerald-200 hover:border-emerald-300 hover:text-emerald-100 disabled:opacity-60 flex items-center justify-center gap-2"
+                                >
+                                  <CircleCheckBig size={14} />
+                                  Approve Payment
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectPayment(order.id)}
+                                  disabled={busyOrderId === order.id}
+                                  className="rounded-2xl border border-rose-400/40 px-4 py-3 text-xs font-bold uppercase tracking-[0.25em] text-rose-200 hover:border-rose-300 hover:text-rose-100 disabled:opacity-60 flex items-center justify-center gap-2"
+                                >
+                                  <CircleX size={14} />
+                                  Reject Payment
+                                </button>
+                              </div>
+                            )}
+
                             <div className="grid gap-3 sm:grid-cols-[1fr_auto] items-center">
                               <div className="space-y-2">
                                 <div className="flex items-center gap-2 flex-wrap">
@@ -865,9 +1105,9 @@ export default function Admin() {
                                   Update tracking status
                                 </label>
                                 <select
-                                  value={order.status}
-                                  onChange={(event) => handleOrderStatusChange(order.id, event.target.value)}
-                                  disabled={busyOrderId === order.id}
+                                  value={orderStatusDrafts[order.id] ?? order.status}
+                                  onChange={(event) => handleOrderStatusDraftChange(order.id, event.target.value)}
+                                  disabled={busyOrderId === order.id || !isApprovedPayment}
                                   className="w-full rounded-2xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-400"
                                 >
                                   {[
@@ -888,9 +1128,9 @@ export default function Admin() {
 
                               <button
                                 type="button"
-                                onClick={() => handleOrderStatusChange(order.id, order.status)}
-                                disabled={busyOrderId === order.id}
-                                className="rounded-2xl bg-emerald-400 px-4 py-3 text-xs font-bold uppercase tracking-[0.25em] text-slate-950 hover:bg-emerald-300 disabled:opacity-60"
+                                onClick={() => handleOrderStatusSave(order.id)}
+                                disabled={busyOrderId === order.id || (!isPendingPayment && !isApprovedPayment) || (!isPendingPayment && (orderStatusDrafts[order.id] ?? order.status) === order.status)}
+                                className="rounded-2xl bg-emerald-400 px-4 py-3 text-xs font-bold uppercase tracking-[0.25em] text-slate-950 transition-colors hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 Save
                               </button>
@@ -901,6 +1141,12 @@ export default function Admin() {
                     })
                   )}
                 </div>
+
+                {salesMessage && (
+                  <p className="mt-4 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">
+                    {salesMessage}
+                  </p>
+                )}
               </div>
             )}
           </div>

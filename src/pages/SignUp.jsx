@@ -1,8 +1,6 @@
 ﻿import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useUserAuth } from "../auth/AuthContext";
-import { doc, getFirestore, setDoc } from "firebase/firestore";
-import { app } from "../config/FirebaseConfig";
 import { useEffect } from "react";
 
 const SignUp = () => {
@@ -24,7 +22,6 @@ const SignUp = () => {
     const [otpResendCount, setOtpResendCount] = useState(0);
 
     const {session, userProfile, authReady, signUpNewUser, isConfiguredAdminEmail} = useUserAuth();
-    const db = getFirestore(app);
     const navigate =  useNavigate();
 
     useEffect(() => {
@@ -50,6 +47,18 @@ const SignUp = () => {
         }
 
         return null;
+    };
+
+    const parseApiPayload = (raw) => {
+        if (!raw) {
+            return {};
+        }
+
+        try {
+            return JSON.parse(raw);
+        } catch {
+            return { message: raw };
+        }
     };
 
     const validations = {
@@ -94,7 +103,7 @@ const SignUp = () => {
             setError("Please enter a valid PH phone number (09XXXXXXXXX, 9XXXXXXXXX, 639XXXXXXXXX, or +639XXXXXXXXX).");
             return;
         }
-
+        
         if (!acceptedTerms) {
             setError("You must accept the Terms & Conditions and Privacy Policy before signing up.");
             return;
@@ -112,7 +121,8 @@ const SignUp = () => {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ email: email.trim().toLowerCase() }),
             });
-            const data = await response.json();
+            const raw = await response.text();
+            const data = parseApiPayload(raw);
 
             if (!response.ok) {
                 throw new Error(data?.message || "Unable to send verification code. Please try again.");
@@ -146,7 +156,8 @@ const SignUp = () => {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ email: email.trim().toLowerCase(), code: otpCode.trim() }),
             });
-            const data = await response.json();
+            const raw = await response.text();
+            const data = parseApiPayload(raw);
 
             if (!response.ok) {
                 throw new Error(data?.message || "Verification failed. Please try again.");
@@ -154,24 +165,9 @@ const SignUp = () => {
 
             setOtpMessage("Verification successful. Creating your account...");
 
-            const result = await signUpNewUser(email, password);
+            const safePhone = normalizedPhone || phone;
+            const result = await signUpNewUser(email, password, { phone: safePhone });
             if (result.success) {
-                const uid = result?.data?.user?.uid;
-                const safePhone = normalizedPhone || phone;
-
-                if (uid) {
-                    setDoc(
-                        doc(db, "users", uid),
-                        {
-                            email,
-                            phone: safePhone,
-                        },
-                        { merge: true },
-                    ).catch((writeError) => {
-                        console.error("Unable to save profile details:", writeError);
-                    });
-                }
-
                 setSuccessMessage(result.message || "Account created successfully.");
                 navigate(result.profile?.role === "admin" ? "/admin" : "/homepage");
                 return;
@@ -205,7 +201,8 @@ const SignUp = () => {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ email: email.trim().toLowerCase() }),
             });
-            const data = await response.json();
+            const raw = await response.text();
+            const data = parseApiPayload(raw);
 
             if (!response.ok) {
                 throw new Error(data?.message || "Unable to resend verification code.");

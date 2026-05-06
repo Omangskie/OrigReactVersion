@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 import { useStore } from '../context/StoreContext';
 import { Package, Truck, CheckCircle, Clock } from 'lucide-react';
 
-const STATUS_STEPS = ['Processing', 'Shipped', 'Delivered', 'Complete'];
+const STATUS_STEPS = ['Pending Payment Approval', 'Processing', 'Shipped', 'Delivered', 'Complete'];
 
 export const Tracking = () => {
   const { orders } = useStore();
@@ -40,7 +40,7 @@ export const Tracking = () => {
             className="border border-zinc-900 bg-zinc-950/50 p-8 rounded-sm relative overflow-hidden"
           >
             {/* Animated background glow for active order */}
-            {order.status !== 'Delivered' && (
+            {order.status !== 'Delivered' && order.status !== 'Complete' && (
               <motion.div 
                 className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-[80px]"
                 animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0.8, 0.5] }}
@@ -88,6 +88,7 @@ export const Tracking = () => {
                         {index === 1 && <Package size={20} />}
                         {index === 2 && <Truck size={20} />}
                         {index === 3 && <CheckCircle size={20} />}
+                        {index === 4 && <CheckCircle size={20} />}
                         
                         {isCurrent && (
                           <motion.div 

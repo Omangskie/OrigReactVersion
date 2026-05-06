@@ -14,6 +14,7 @@ const AdminSignUp = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [registeringAdmin, setRegisteringAdmin] = useState(false);
@@ -124,23 +125,32 @@ const AdminSignUp = () => {
 
           <div>
             <label htmlFor="admin-signup-password" className="block text-sm text-zinc-300 mb-2">Password</label>
-            <input
-              id="admin-signup-password"
-              type="password"
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-100 focus:outline-none focus:border-emerald-400"
-              placeholder="Strong password"
-              autoComplete="new-password"
-            />
+            <div className="relative">
+              <input
+                id="admin-signup-password"
+                type={showPassword ? "text" : "password"}
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 pr-28 text-zinc-100 focus:outline-none focus:border-emerald-400"
+                placeholder="Strong password"
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold uppercase tracking-wide text-zinc-300 hover:text-emerald-300"
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
           </div>
 
           <div>
             <label htmlFor="admin-signup-confirm" className="block text-sm text-zinc-300 mb-2">Confirm password</label>
             <input
               id="admin-signup-confirm"
-              type="password"
+              type={showPassword ? "text" : "password"}
               required
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
