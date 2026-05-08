@@ -27,15 +27,6 @@ const getCredentials = () => {
   };
 };
 
-const getMissingCredentialEnvNames = (credentials) => {
-  const missing = [];
-
-  if (!credentials.projectId) missing.push("FIREBASE_PROJECT_ID");
-  if (!credentials.clientEmail) missing.push("FIREBASE_CLIENT_EMAIL");
-  if (!credentials.privateKey) missing.push("FIREBASE_PRIVATE_KEY");
-
-  return missing;
-};
 
 const ensureApp = () => {
   if (getApps().length > 0) {
@@ -45,11 +36,7 @@ const ensureApp = () => {
   const credentials = getCredentials();
 
   if (!credentials.projectId || !credentials.clientEmail || !credentials.privateKey) {
-    const missing = getMissingCredentialEnvNames(credentials);
-    throw new Error(
-      `Firebase Admin credentials are missing on the server. Missing: ${missing.join(", ")}. ` +
-        "Set FIREBASE_SERVICE_ACCOUNT_JSON or the three FIREBASE_* Admin vars."
-    );
+    throw new Error("Firebase Admin credentials are missing on the server.");
   }
 
   return initializeApp({
