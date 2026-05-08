@@ -73,15 +73,22 @@ const sendBrevoOtpEmail = async (email, code) => {
     body: JSON.stringify(payload),
   });
 
+  const bodyText = await response.text();
+  console.log('Brevo OTP send response:', {
+    email,
+    status: response.status,
+    ok: response.ok,
+    body: bodyText,
+  });
+
   if (!response.ok) {
-    const body = await response.text();
-    const error = new Error(`Brevo request failed: ${response.status} ${body}`);
+    const error = new Error(`Brevo request failed: ${response.status} ${bodyText}`);
     error.status = response.status;
-    error.details = body;
+    error.details = bodyText;
     throw error;
   }
 
-  return response.json();
+  return bodyText ? JSON.parse(bodyText) : {};
 };
 
 const createAuthorizationHeader = () => {
