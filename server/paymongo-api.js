@@ -28,7 +28,9 @@ const paymongoKeyMode = paymongoSecretKey?.startsWith('sk_live_') ? 'live' : pay
 const paymongoWebhookSecret = process.env.PAYMONGO_WEBHOOK_SECRET?.trim();
 
 const otpStore = new Map();
+const passwordResetTokens = new Map();
 const OTP_TTL_MS = 5 * 60 * 1000;
+const PASSWORD_RESET_TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
 const BREVO_API_KEY = process.env.BREVO_API_KEY?.trim();
 const BREVO_SENDER_NAME = process.env.BREVO_SENDER_NAME?.trim() || 'Originals Printing';
@@ -36,6 +38,7 @@ const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL?.trim() || 'noreply@or
 
 const normalizeEmail = (value) => typeof value === 'string' ? value.trim().toLowerCase() : '';
 const generateOtpCode = () => Math.floor(100000 + Math.random() * 900000).toString();
+const generateResetToken = () => crypto.randomBytes(24).toString('hex');
 const isActiveAdmin = (profile = {}) => profile.role === 'admin' && profile.status !== 'deleted' && profile.status !== 'suspended';
 const maskEmail = (email) => {
   const [local, domain] = String(email || '').split('@');
@@ -367,7 +370,50 @@ app.post('/api/auth/verify-otp', (req, res) => {
   }
 
   otpStore.delete(email);
-  return res.json({ ok: true, message: 'Verification succeeded.' });
+  const resetToken = generateResetToken();
+  passwordResetTokens.set(resetToken, {
+    email,
+    expiresAt: Date.now() + PASSWORD_RESET_TOKEN_TTL_MS,
+  });
+
+  return res.json({ ok: true, message: 'Verification succeeded.', resetToken });
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const resetToken = String(req.body?.resetToken || '').trim();
+    const newPassword = String(req.body?.password || '').trim();
+
+    if (!email || !resetToken || !newPassword) {
+      return res.status(400).json({ message: 'Email, reset token, and new password are required.' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'Password is too weak. Use at least 6 characters.' });
+    }
+
+    const tokenRecord = passwordResetTokens.get(resetToken);
+    if (!tokenRecord || tokenRecord.email !== email) {
+      return res.status(400).json({ message: 'Invalid or expired password reset token. Please verify the OTP again.' });
+    }
+
+    if (tokenRecord.expiresAt < Date.now()) {
+      passwordResetTokens.delete(resetToken);
+      return res.status(400).json({ message: 'Password reset session expired. Please verify the OTP again.' });
+    }
+
+    const { auth } = getFirebaseAdmin();
+    const userRecord = await auth.getUserByEmail(email);
+    await auth.updateUser(userRecord.uid, { password: newPassword });
+    await auth.revokeRefreshTokens(userRecord.uid);
+
+    passwordResetTokens.delete(resetToken);
+
+    return res.json({ ok: true, message: 'Password updated successfully.' });
+  } catch (error) {
+    return res.status(500).json({ message: error?.message || 'Failed to reset password.' });
+  }
 });
 
 app.post('/api/auth/delete-user', async (req, res) => {

@@ -27,6 +27,7 @@ const getCredentials = () => {
   };
 };
 
+
 const ensureApp = () => {
   if (getApps().length > 0) {
     return getApps()[0];

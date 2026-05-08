@@ -10,9 +10,26 @@ const SignIn = () => {
     const [forgotMode, setForgotMode] = useState(false);
     const [resetOtpStage, setResetOtpStage] = useState(false);
     const [resetOtpCode, setResetOtpCode] = useState("");
+    const [resetPasswordStage, setResetPasswordStage] = useState(false);
+    const [resetPasswordToken, setResetPasswordToken] = useState("");
+    const [newPassword, setNewPassword] = useState("");
+    const [confirmNewPassword, setConfirmNewPassword] = useState("");
+    const [showNewPassword, setShowNewPassword] = useState(false);
+    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [forgotMessage, setForgotMessage] = useState("");
     const [forgotError, setForgotError] = useState("");
     const [forgotLoading, setForgotLoading] = useState(false);
+
+    const passwordValidations = {
+        length: newPassword.length >= 8,
+        uppercase: /[A-Z]/.test(newPassword),
+        lowercase: /[a-z]/.test(newPassword),
+        number: /\d/.test(newPassword),
+        special: /[^A-Za-z0-9]/.test(newPassword),
+    };
+
+    const isPasswordValid = Object.values(passwordValidations).every(Boolean);
+    const passwordsMatch = newPassword.length > 0 && newPassword === confirmNewPassword;
     const [error, setError] = useState("");
     const [successMessage, setSuccessMessage] = useState("");
     const [errorCode, setErrorCode] = useState("");
@@ -83,6 +100,10 @@ const SignIn = () => {
         setForgotMessage("");
         setResetOtpStage(false);
         setResetOtpCode("");
+        setResetPasswordStage(false);
+        setResetPasswordToken("");
+        setNewPassword("");
+        setConfirmNewPassword("");
     };
 
     const handleSendResetOtp = async () => {
@@ -109,6 +130,8 @@ const SignIn = () => {
             }
 
             setResetOtpStage(true);
+            setResetPasswordStage(false);
+            setResetPasswordToken("");
             setForgotMessage(payload?.message || "Check your email for the verification code.");
         } catch (error) {
             setForgotError(error.message || "Unable to send reset code. Please try again.");
@@ -146,17 +169,78 @@ const SignIn = () => {
                 throw new Error(verifyPayload?.message || "Invalid verification code.");
             }
 
-            const resetResult = await resetUserPassword(email);
-            if (!resetResult.success) {
-                throw new Error(resetResult.error || "Failed to send password reset email.");
+            if (!verifyPayload?.resetToken) {
+                throw new Error("Verification succeeded, but the reset session token was missing.");
             }
 
-            setForgotMessage("Verification succeeded. A password reset email has been sent.");
-            setForgotMode(false);
+            setResetPasswordToken(verifyPayload.resetToken);
+            setResetPasswordStage(true);
+            setForgotMessage("Verification succeeded. Enter a new password to continue.");
             setResetOtpStage(false);
             setResetOtpCode("");
         } catch (error) {
             setForgotError(error.message || "Unable to verify code or send reset instructions.");
+        } finally {
+            setForgotLoading(false);
+        }
+    };
+
+    const handleSubmitNewPassword = async (e) => {
+        e.preventDefault();
+        setForgotError("");
+        setForgotMessage("");
+        setForgotLoading(true);
+
+        if (!email) {
+            setForgotError("Email is required to reset the password.");
+            setForgotLoading(false);
+            return;
+        }
+
+        if (!resetPasswordToken) {
+            setForgotError("Your reset session expired. Please verify the OTP again.");
+            setForgotLoading(false);
+            return;
+        }
+
+        if (!newPassword || !confirmNewPassword) {
+            setForgotError("Please enter and confirm your new password.");
+            setForgotLoading(false);
+            return;
+        }
+
+        if (newPassword !== confirmNewPassword) {
+            setForgotError("Passwords do not match.");
+            setForgotLoading(false);
+            return;
+        }
+
+        try {
+            const response = await fetch("/api/auth/reset-password", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    email,
+                    resetToken: resetPasswordToken,
+                    password: newPassword,
+                }),
+            });
+
+            const payload = await response.json();
+            if (!response.ok) {
+                throw new Error(payload?.message || "Unable to update password.");
+            }
+
+            setForgotMessage(payload?.message || "Password updated successfully. You can now sign in.");
+            setForgotMode(false);
+            setResetOtpStage(false);
+            setResetPasswordStage(false);
+            setResetOtpCode("");
+            setResetPasswordToken("");
+            setNewPassword("");
+            setConfirmNewPassword("");
+        } catch (error) {
+            setForgotError(error.message || "Unable to update password.");
         } finally {
             setForgotLoading(false);
         }
@@ -229,7 +313,7 @@ const SignIn = () => {
                                     <h2 className="mt-4 text-3xl font-bold tracking-tight text-white">Continue to Originals</h2>
                                 </div>
                                 {forgotMode ? (
-                                    <form onSubmit={handleVerifyOtpAndSendReset} className="space-y-6">
+                                    <form onSubmit={resetPasswordStage ? handleSubmitNewPassword : handleVerifyOtpAndSendReset} className="space-y-6">
                                         <div className="space-y-3">
                                             <label htmlFor="email" className="block text-sm font-medium text-zinc-300">Email address</label>
                                             <input
@@ -243,7 +327,69 @@ const SignIn = () => {
                                                 className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder:text-zinc-500 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
                                             />
                                         </div>
-                                        {resetOtpStage ? (
+                                        {resetPasswordStage ? (
+                                            <>
+                                                <div className="space-y-3">
+                                                    <label htmlFor="new-password" className="block text-sm font-medium text-zinc-300">New password</label>
+                                                    <div className="relative">
+                                                        <input
+                                                            id="new-password"
+                                                            value={newPassword}
+                                                            onChange={(e) => setNewPassword(e.target.value)}
+                                                            type={showNewPassword ? "text" : "password"}
+                                                            required
+                                                            placeholder="Enter new password"
+                                                            autoComplete="new-password"
+                                                            className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 pr-20 text-white placeholder:text-zinc-500 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setShowNewPassword((prev) => !prev)}
+                                                            className="absolute inset-y-0 right-0 flex items-center px-3 text-zinc-400 hover:text-white"
+                                                            aria-label={showNewPassword ? "Hide password" : "Show password"}
+                                                        >
+                                                            {showNewPassword ? "Hide" : "Show"}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-3">
+                                                    <label htmlFor="confirm-new-password" className="block text-sm font-medium text-zinc-300">Confirm new password</label>
+                                                    <div className="relative">
+                                                        <input
+                                                            id="confirm-new-password"
+                                                            value={confirmNewPassword}
+                                                            onChange={(e) => setConfirmNewPassword(e.target.value)}
+                                                            type={showConfirmPassword ? "text" : "password"}
+                                                            required
+                                                            placeholder="Confirm new password"
+                                                            autoComplete="new-password"
+                                                            className={`w-full rounded-2xl border px-4 py-3 pr-20 text-white placeholder:text-zinc-500 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20 ${confirmNewPassword.length > 0 && passwordsMatch ? "border-emerald-500/80" : confirmNewPassword.length > 0 ? "border-red-500/80" : "border-white/10 bg-white/5"}`}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setShowConfirmPassword((prev) => !prev)}
+                                                            className="absolute inset-y-0 right-0 flex items-center px-3 text-zinc-400 hover:text-white"
+                                                            aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                                                        >
+                                                            {showConfirmPassword ? "Hide" : "Show"}
+                                                        </button>
+                                                    </div>
+                                                    {confirmNewPassword.length > 0 && !passwordsMatch && (
+                                                        <p className="text-xs text-red-400">Passwords do not match.</p>
+                                                    )}
+                                                </div>
+                                                <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-zinc-300">
+                                                    <p className="font-semibold text-white">Password requirements</p>
+                                                    <ul className="mt-2 space-y-1 list-disc pl-5">
+                                                        <li className={passwordValidations.length ? "text-green-400" : "text-red-400"}>At least 8 characters</li>
+                                                        <li className={passwordValidations.uppercase ? "text-green-400" : "text-red-400"}>One uppercase letter</li>
+                                                        <li className={passwordValidations.lowercase ? "text-green-400" : "text-red-400"}>One lowercase letter</li>
+                                                        <li className={passwordValidations.number ? "text-green-400" : "text-red-400"}>One number</li>
+                                                        <li className={passwordValidations.special ? "text-green-400" : "text-red-400"}>One special symbol</li>
+                                                    </ul>
+                                                </div>
+                                            </>
+                                        ) : resetOtpStage ? (
                                             <div className="space-y-3">
                                                 <div className="flex items-center justify-between">
                                                     <label htmlFor="reset-code" className="text-sm font-medium text-zinc-300">Verification code</label>
@@ -274,15 +420,17 @@ const SignIn = () => {
                                             </div>
                                         )}
                                         <button
-                                            type={resetOtpStage ? "submit" : "button"}
-                                            onClick={resetOtpStage ? undefined : handleSendResetOtp}
-                                            disabled={forgotLoading}
+                                            type={resetOtpStage || resetPasswordStage ? "submit" : "button"}
+                                            onClick={resetOtpStage || resetPasswordStage ? undefined : handleSendResetOtp}
+                                            disabled={forgotLoading || (resetPasswordStage && (!isPasswordValid || !passwordsMatch))}
                                             className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold uppercase tracking-[0.12em] text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
                                         >
                                             {forgotLoading
                                                 ? "Please wait..."
-                                                : resetOtpStage
-                                                    ? "Verify code & send reset link"
+                                                : resetPasswordStage
+                                                    ? "Save new password"
+                                                    : resetOtpStage
+                                                        ? "Verify code"
                                                     : "Send verification code"
                                             }
                                         </button>
