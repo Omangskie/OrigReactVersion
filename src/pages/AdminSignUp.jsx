@@ -73,17 +73,11 @@ const AdminSignUp = () => {
 
     setLoading(true);
     try {
-      const result = await signUpNewUser(email, password);
+      const result = await signUpNewUser(email, password, { role: "admin" });
 
       if (!result.success) {
         setError(result.error || "Unable to create admin account.");
         return;
-      }
-
-      const uid = result?.data?.user?.uid;
-
-      if (uid && result.profile?.role !== "admin") {
-        await setUserRole(uid, "admin");
       }
 
       navigate("/admin", { replace: true });

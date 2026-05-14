@@ -14,7 +14,7 @@ const AdminRoute = ({ children }) => {
   }
 
   if (!isAdmin && !isConfiguredAdminEmail(session?.email || "")) {
-    return <Navigate to="/admin" replace />;
+    return <Navigate to="/admin/signin" replace />;
   }
 
   return <>{children}</>;

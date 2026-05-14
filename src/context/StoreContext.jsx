@@ -107,7 +107,7 @@ export const StoreProvider = ({ children }) => {
   const [cart, setCart] = useState(createInitialCart);
   const [orders, setOrders] = useState([]);
   const [catalog, setCatalog] = useState(createInitialCatalog);
-  const { userProfile, session, authReady } = useUserAuth();
+  const { userProfile, session, authReady, isConfiguredAdminEmail } = useUserAuth();
   const db = getFirestore(app);
   const auth = getAuth(app);
   const storage = getStorage(app);
@@ -142,7 +142,20 @@ export const StoreProvider = ({ children }) => {
     }
 
     const ordersCollection = collection(db, 'orders');
-    const isAdmin = userProfile?.role === 'admin';
+    const isAdmin =
+      userProfile?.role === 'admin' ||
+      (userProfile == null && session?.email && isConfiguredAdminEmail(session.email)) ||
+      session?.displayName === 'admin';
+
+    console.log('StoreContext - isAdmin check:', {
+      userProfileRole: userProfile?.role,
+      userProfileNull: userProfile == null,
+      sessionEmail: session?.email,
+      isConfiguredAdminEmail: session?.email ? isConfiguredAdminEmail(session.email) : false,
+      sessionDisplayName: session?.displayName,
+      isAdmin
+    });
+
     const ordersQuery = isAdmin
       ? query(ordersCollection)
       : query(ordersCollection, where('purchaserUid', '==', session.uid));
@@ -161,7 +174,7 @@ export const StoreProvider = ({ children }) => {
     );
 
     return () => unsubscribe();
-  }, [authReady, db, session?.uid, userProfile?.role]);
+  }, [authReady, db, session?.uid, userProfile?.role, session?.email]);
 
   const addToCart = (product) => {
     if (authReady && !session) {
@@ -481,6 +494,23 @@ export const StoreProvider = ({ children }) => {
     }
   };
 
+  const cancelOrder = async (orderId) => {
+    const order = orders.find((entry) => entry.id === orderId);
+    if (!order?.firestoreId || !['Pending Payment Approval', 'Processing'].includes(order.status)) {
+      return false;
+    }
+
+    try {
+      await updateDoc(doc(db, 'orders', order.firestoreId), { status: 'Cancelled' });
+
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: 'Cancelled' } : o)));
+      return true;
+    } catch (err) {
+      console.error('cancelOrder failed:', err);
+      return false;
+    }
+  };
+
   const updateOrderStatus = async (orderId, nextStatus) => {
     if (!ORDER_STATUS_STEPS.includes(nextStatus)) {
       return false;
@@ -528,6 +558,7 @@ export const StoreProvider = ({ children }) => {
         submitOrderForPaymentReview,
         approveOrderPayment,
         rejectOrderPayment,
+        cancelOrder,
         updateOrderStatus,
       }}
     >

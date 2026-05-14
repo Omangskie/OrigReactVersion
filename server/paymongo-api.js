@@ -77,21 +77,28 @@ const sendBrevoOtpEmail = async (email, code) => {
   });
 
   const bodyText = await response.text();
+  let responseBody = null;
+  try {
+    responseBody = JSON.parse(bodyText);
+  } catch {
+    responseBody = bodyText;
+  }
+
   console.log('Brevo OTP send response:', {
     email,
     status: response.status,
     ok: response.ok,
-    body: bodyText,
+    body: responseBody,
   });
 
   if (!response.ok) {
-    const error = new Error(`Brevo request failed: ${response.status} ${bodyText}`);
+    const error = new Error(`Brevo request failed: ${response.status} ${typeof responseBody === 'string' ? responseBody : responseBody?.message || JSON.stringify(responseBody)}`);
     error.status = response.status;
-    error.details = bodyText;
+    error.details = responseBody;
     throw error;
   }
 
-  return bodyText ? JSON.parse(bodyText) : {};
+  return responseBody || {};
 };
 
 const createAuthorizationHeader = () => {
@@ -331,7 +338,15 @@ app.post('/api/auth/send-otp', async (req, res) => {
     if (error?.status === 401) {
       return res.status(503).json({
         message:
-          'Brevo rejected the API key with 401 Unauthorized. In Brevo, enable API keys for API usage or switch this flow to SMTP delivery.',
+          'Brevo rejected the API key with 401 Unauthorized. Check the BREVO_API_KEY and make sure your Brevo API key is enabled for API usage.',
+        details: error?.details || error?.message || null,
+      });
+    }
+
+    if (error?.status === 400) {
+      return res.status(502).json({
+        message:
+          'Brevo rejected the request. Verify that BREVO_SENDER_EMAIL is a valid Brevo sender and that your account can send from that address.',
         details: error?.details || error?.message || null,
       });
     }

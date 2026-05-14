@@ -13,20 +13,25 @@ service cloud.firestore {
       return /databases/$(database)/documents/users/$(uid);
     }
 
-    function isAdmin() {
-      return signedIn()
-        && exists(userDocPath(request.auth.uid))
-        && get(userDocPath(request.auth.uid)).data.role == 'admin'
-        && get(userDocPath(request.auth.uid)).data.status != 'deleted'
-        && get(userDocPath(request.auth.uid)).data.status != 'suspended';
-    }
-
-    // Replace this list with your allowed bootstrap admin emails.
     function isBootstrapAdminEmail() {
       return signedIn()
-        && request.auth.token.email in [
-          'sampleadmin@gmail.com'
-        ];
+        && (
+          request.auth.token.email == 'kylebriantonido123@gmail.com'
+          || request.auth.token.firebase.identities['email'][0] == 'kylebriantonido123@gmail.com'
+        );
+    }
+
+    function isAdmin() {
+      return (
+        isBootstrapAdminEmail()
+        || (
+          signedIn()
+          && exists(userDocPath(request.auth.uid))
+          && get(userDocPath(request.auth.uid)).data.role == 'admin'
+          && get(userDocPath(request.auth.uid)).data.status != 'deleted'
+          && get(userDocPath(request.auth.uid)).data.status != 'suspended'
+        )
+      );
     }
 
     function validRoleForSelfCreate() {
@@ -57,6 +62,23 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    function isOrderCancellation() {
+      return signedIn()
+        && resource.data.purchaserUid == request.auth.uid
+        && (resource.data.status == 'Pending Payment Approval' || resource.data.status == 'Processing')
+        && request.resource.data.status == 'Cancelled'
+        && request.resource.data.purchaserUid == resource.data.purchaserUid
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.total == resource.data.total
+        && request.resource.data.date == resource.data.date
+        && request.resource.data.estimatedDelivery == resource.data.estimatedDelivery
+        && request.resource.data.purchaserRole == resource.data.purchaserRole
+        && request.resource.data.purchaserEmail == resource.data.purchaserEmail
+        && request.resource.data.shipping == resource.data.shipping
+        && request.resource.data.payment == resource.data.payment
+        && request.resource.data.items == resource.data.items;
+    }
+
     match /orders/{orderDocId} {
       // Customer submits receipt proof and creates own order.
       allow create: if signedIn()
@@ -69,7 +91,13 @@ service cloud.firestore {
       allow read: if isAdmin() || (signedIn() && resource.data.purchaserUid == request.auth.uid);
 
       // Admin confirms/rejects receipt proof and moves tracking status.
-      allow update, delete: if isAdmin();
+      allow update: if isAdmin() || isOrderCancellation();
+      allow delete: if isAdmin();
+    }
+
+    match /showcase/{showcaseId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
     }
 
     match /{document=**} {

@@ -37,6 +37,7 @@ const AdminSignIn = () => {
 
       const isAdminAccount =
         result.profile?.role === "admin" ||
+        result?.data?.user?.displayName === "admin" ||
         isConfiguredAdminEmail(result?.data?.user?.email || email);
 
       if (!isAdminAccount) {

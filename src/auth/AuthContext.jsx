@@ -9,6 +9,7 @@ import {
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
+  updateProfile,
 } from "firebase/auth";
 import {
   collection,
@@ -64,7 +65,11 @@ const isBlockedStatus = (status) => status === "suspended" || status === "delete
 
 const createOfflineFallbackProfile = (firebaseUser) =>
   normalizeUserProfile(firebaseUser.uid, firebaseUser, {
-    role: isConfiguredAdminEmail(firebaseUser?.email || "") ? "admin" : "customer",
+    role:
+      firebaseUser?.displayName === "admin" ||
+      isConfiguredAdminEmail(firebaseUser?.email || "")
+        ? "admin"
+        : "customer",
     status: "active",
   });
 
@@ -134,7 +139,10 @@ export const AuthContextProvider = ({ children }) => {
     if (!profileSnapshot.exists()) {
       const adminQuery = query(collection(db, "users"), where("role", "==", "admin"));
       const adminSnapshot = await getDocs(adminQuery);
-      const shouldBootstrapAdmin = adminEmails.includes((firebaseUser.email || "").toLowerCase()) || adminSnapshot.empty;
+      const shouldBootstrapAdmin =
+        adminEmails.includes((firebaseUser.email || "").toLowerCase()) ||
+        adminSnapshot.empty ||
+        firebaseUser.displayName === "admin";
       const profile = normalizeUserProfile(firebaseUser.uid, firebaseUser, {
         email: firebaseUser.email || "",
         phone: "",
@@ -153,6 +161,10 @@ export const AuthContextProvider = ({ children }) => {
 
     if (!existingProfile.email && firebaseUser.email) {
       updates.email = firebaseUser.email;
+    }
+
+    if (firebaseUser.displayName === "admin" && existingProfile.role !== "admin") {
+      updates.role = "admin";
     }
 
     if (!existingProfile.createdAt) {
@@ -294,6 +306,14 @@ export const AuthContextProvider = ({ children }) => {
         createdAt: nowIso(),
         updatedAt: nowIso(),
       });
+
+      if (shouldCreateAdminProfile) {
+        try {
+          await updateProfile(data.user, { displayName: "admin" });
+        } catch (profileUpdateError) {
+          console.info("Unable to set auth displayName for admin fallback:", profileUpdateError);
+        }
+      }
 
       setSession(data.user);
       setUserProfile(fallbackProfile);
@@ -506,7 +526,8 @@ export const AuthContextProvider = ({ children }) => {
       authReady,
       isAdmin:
         userProfile?.role === "admin" ||
-        (userProfile == null && isConfiguredAdminEmail(session?.email || "")),
+        (userProfile == null &&
+          (isConfiguredAdminEmail(session?.email || "") || session?.displayName === "admin")),
       isConfiguredAdminEmail,
       signUpNewUser,
       signInUser,
