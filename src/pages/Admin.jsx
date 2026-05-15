@@ -5,9 +5,13 @@ import { ArchiveRestore, BarChart3, ShieldCheck, ShoppingBag, Users, UserRoundCo
 import { Link } from 'react-router-dom';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { addDoc, collection, deleteDoc, doc, getFirestore, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { getDownloadURL, getStorage, ref, uploadBytes } from 'firebase/storage';
+import { app } from '../config/FirebaseConfig';
 import { useUserAuth } from '../auth/AuthContext';
 import { useStore } from '../context/StoreContext';
 import PricingForm from '../components/admin/PricingForm';
+import { SHOWCASE_CATEGORIES } from './Showcase';
 
 export default function Admin() {
   const { session, userProfile, users, signOut, suspendUser, deleteUser, restoreUser, setUserRole } = useUserAuth();
@@ -51,10 +55,24 @@ export default function Admin() {
   const [newProductMessage, setNewProductMessage] = useState('');
   const [userMessage, setUserMessage] = useState('');
   const [salesMessage, setSalesMessage] = useState('');
+  const [showcaseForm, setShowcaseForm] = useState({
+    category: SHOWCASE_CATEGORIES[0],
+    productId: '',
+    title: '',
+    description: '',
+    imageFile: null,
+    imageUrl: '',
+  });
+  const [showcaseItems, setShowcaseItems] = useState([]);
+  const [showcaseMessage, setShowcaseMessage] = useState('');
+  const [savingShowcase, setSavingShowcase] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [paymentApprovalDrafts, setPaymentApprovalDrafts] = useState({});
 
-  const customerUsers = useMemo(() => users.filter((user) => user.role === 'customer'), [users]);
+  const db = getFirestore(app);
+  const storage = getStorage(app);
+
+  const accountUsers = useMemo(() => users.filter((user) => user.role !== 'admin'), [users]);
 
   useEffect(() => {
     if (activeProducts.length === 0) {
@@ -66,6 +84,30 @@ export default function Admin() {
       setSelectedProductId(activeProducts[0].id);
     }
   }, [activeProducts, selectedProductId]);
+
+  useEffect(() => {
+    setShowcaseForm((current) => ({
+      ...current,
+      productId: current.productId || activeProducts[0]?.id || '',
+    }));
+  }, [activeProducts]);
+
+  useEffect(() => {
+    const collectionRef = collection(db, 'showcase');
+    const snapshotQuery = query(collectionRef, orderBy('createdAt', 'desc'));
+
+    const unsubscribe = onSnapshot(
+      snapshotQuery,
+      (snapshot) => {
+        setShowcaseItems(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+      },
+      (error) => {
+        console.error('Unable to sync showcase items:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [db]);
 
   useEffect(() => {
     setOrderStatusDrafts((previousDrafts) => {
@@ -120,6 +162,7 @@ export default function Admin() {
       const paymentStatus = order.payment?.status;
       return !paymentStatus || paymentStatus === 'approved';
     });
+    const registeredUsers = users.length;
     const activeUsers = users.filter((user) => user.status === 'active').length;
     const suspendedUsers = users.filter((user) => user.status === 'suspended').length;
     const deletedUsers = users.filter((user) => user.status === 'deleted').length;
@@ -135,6 +178,7 @@ export default function Admin() {
     }, {});
 
     return {
+      registeredUsers,
       activeUsers,
       suspendedUsers,
       deletedUsers,
@@ -197,6 +241,82 @@ export default function Admin() {
       ...currentDrafts,
       [orderId]: status,
     }));
+  };
+
+  const resetShowcaseForm = () => {
+    setShowcaseForm({
+      category: SHOWCASE_CATEGORIES[0],
+      productId: activeProducts[0]?.id || '',
+      title: '',
+      description: '',
+      imageFile: null,
+      imageUrl: '',
+    });
+  };
+
+  const handleShowcaseUploadFile = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setShowcaseForm((current) => ({
+      ...current,
+      imageFile: file,
+      imageUrl: '',
+    }));
+  };
+
+  const handleCreateShowcaseItem = async (event) => {
+    event.preventDefault();
+
+    if (!showcaseForm.category || !showcaseForm.productId || (!showcaseForm.imageFile && !showcaseForm.imageUrl)) {
+      setShowcaseMessage('Please select a category, product, and upload an image or provide a URL.');
+      window.setTimeout(() => setShowcaseMessage(''), 4000);
+      return;
+    }
+
+    setSavingShowcase(true);
+    try {
+      let storedImageUrl = showcaseForm.imageUrl;
+
+      if (showcaseForm.imageFile) {
+        const storageRef = ref(storage, `showcase/${Date.now()}-${showcaseForm.imageFile.name}`);
+        await uploadBytes(storageRef, showcaseForm.imageFile);
+        storedImageUrl = await getDownloadURL(storageRef);
+      }
+
+      await addDoc(collection(db, 'showcase'), {
+        category: showcaseForm.category,
+        productId: showcaseForm.productId,
+        productName: activeProducts.find((product) => product.id === showcaseForm.productId)?.name || '',
+        title: showcaseForm.title.trim(),
+        description: showcaseForm.description.trim(),
+        imageUrl: storedImageUrl,
+        createdAt: new Date().toISOString(),
+      });
+
+      resetShowcaseForm();
+      setShowcaseMessage('Showcase photo uploaded successfully.');
+    } catch (error) {
+      console.error('Unable to upload showcase item:', error);
+      setShowcaseMessage(error?.message || 'Unable to upload showcase item.');
+    } finally {
+      setSavingShowcase(false);
+      window.setTimeout(() => setShowcaseMessage(''), 4000);
+    }
+  };
+
+  const handleDeleteShowcaseItem = async (itemId) => {
+    try {
+      await deleteDoc(doc(db, 'showcase', itemId));
+      setShowcaseMessage('Showcase item removed.');
+    } catch (error) {
+      console.error('Unable to remove showcase item:', error);
+      setShowcaseMessage(error?.message || 'Unable to remove showcase item.');
+    } finally {
+      window.setTimeout(() => setShowcaseMessage(''), 4000);
+    }
   };
 
   const handleOrderStatusSave = async (orderId) => {
@@ -484,6 +604,7 @@ export default function Admin() {
               {[
                 { value: 'dashboard', label: 'Dashboard' },
                 { value: 'products', label: 'Products' },
+                { value: 'showcase', label: 'Showcase' },
                 { value: 'users', label: 'Users' },
                 { value: 'sales', label: 'Sales' },
               ].map((tab) => (
@@ -509,9 +630,9 @@ export default function Admin() {
                 <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                   {[
                     { label: 'Active users', value: metrics.activeUsers, icon: Users },
+                    { label: 'Total users', value: metrics.registeredUsers, icon: Users },
                     { label: 'Items sold', value: metrics.soldItems, icon: ShoppingBag },
                     { label: 'Active products', value: activeProducts.length, icon: UserRoundCog },
-                    { label: 'Normal user revenue', value: `₱${metrics.revenueFromNormalUsers.toFixed(2)}`, icon: BarChart3 },
                   ].map((item) => {
                     const Icon = item.icon;
 
@@ -537,6 +658,10 @@ export default function Admin() {
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-zinc-400">Active users</span>
                         <span className="font-semibold text-zinc-100">{metrics.activeUsers}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-zinc-400">Registered users</span>
+                        <span className="font-semibold text-zinc-100">{metrics.registeredUsers}</span>
                       </div>
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-zinc-400">Suspended users</span>
@@ -933,6 +1058,154 @@ export default function Admin() {
               </div>
             )}
 
+            {activeTab === 'showcase' && (
+              <div className="space-y-6">
+                <div className="rounded-4xl border border-white/10 bg-slate-950/80 p-6 md:p-8">
+                  <div className="flex items-center justify-between gap-4 mb-6">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.35em] text-emerald-400">Showcase gallery</p>
+                      <h2 className="mt-2 text-2xl font-black uppercase tracking-tight">Upload showcase work</h2>
+                    </div>
+                    <Upload size={20} className="text-emerald-300" />
+                  </div>
+                  <form onSubmit={handleCreateShowcaseItem} className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="space-y-2 text-sm text-zinc-300">
+                        <span>Category</span>
+                        <select
+                          value={showcaseForm.category}
+                          onChange={(event) => setShowcaseForm((current) => ({ ...current, category: event.target.value }))}
+                          className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-50 outline-none focus:border-emerald-400"
+                        >
+                          {SHOWCASE_CATEGORIES.map((category) => (
+                            <option key={category} value={category} className="bg-slate-950 text-zinc-50">
+                              {category}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="space-y-2 text-sm text-zinc-300">
+                        <span>Product</span>
+                        <select
+                          value={showcaseForm.productId}
+                          onChange={(event) => setShowcaseForm((current) => ({ ...current, productId: event.target.value }))}
+                          className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-50 outline-none focus:border-emerald-400"
+                        >
+                          {activeProducts.map((product) => (
+                            <option key={product.id} value={product.id} className="bg-slate-950 text-zinc-50">
+                              {product.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="space-y-2 text-sm text-zinc-300">
+                        <span>Title</span>
+                        <input
+                          type="text"
+                          value={showcaseForm.title}
+                          onChange={(event) => setShowcaseForm((current) => ({ ...current, title: event.target.value }))}
+                          className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-50 outline-none focus:border-emerald-400"
+                          placeholder="Optional title"
+                        />
+                      </label>
+                      <label className="space-y-2 text-sm text-zinc-300">
+                        <span>Description</span>
+                        <input
+                          type="text"
+                          value={showcaseForm.description}
+                          onChange={(event) => setShowcaseForm((current) => ({ ...current, description: event.target.value }))}
+                          className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-50 outline-none focus:border-emerald-400"
+                          placeholder="Optional description"
+                        />
+                      </label>
+                    </div>
+
+                    <label className="space-y-2 text-sm text-zinc-300 block">
+                      <span>Image URL or upload *</span>
+                      <input
+                        type="url"
+                        value={showcaseForm.imageUrl}
+                        onChange={(event) => setShowcaseForm((current) => ({ ...current, imageUrl: event.target.value, imageFile: null }))}
+                        className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-50 outline-none focus:border-emerald-400"
+                        placeholder="https://..."
+                      />
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleShowcaseUploadFile}
+                        className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-400 file:mr-4 file:rounded-full file:border-0 file:bg-emerald-400 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-slate-950"
+                      />
+                      <p className="text-xs text-zinc-500">Use either an image URL or upload a photo directly.</p>
+                    </label>
+
+                    <div className="flex flex-col gap-3 sm:flex-row">
+                      <button
+                        type="submit"
+                        disabled={savingShowcase}
+                        className="flex-1 rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-bold uppercase tracking-[0.25em] text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {savingShowcase ? 'Uploading…' : 'Upload Showcase Photo'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={resetShowcaseForm}
+                        className="flex-1 rounded-2xl border border-white/10 px-5 py-3 text-sm font-bold uppercase tracking-[0.25em] text-zinc-300 hover:border-emerald-400 hover:text-emerald-300"
+                      >
+                        Reset
+                      </button>
+                    </div>
+
+                    {showcaseMessage && (
+                      <p className="text-sm text-emerald-300">{showcaseMessage}</p>
+                    )}
+                  </form>
+                </div>
+
+                <div className="rounded-4xl border border-white/10 bg-slate-950/80 p-6 md:p-8">
+                  <div className="flex items-center justify-between gap-4 mb-6">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.35em] text-emerald-400">Current showcase items</p>
+                      <h3 className="mt-2 text-xl font-black uppercase tracking-tight">Gallery entries</h3>
+                    </div>
+                    <span className="text-sm text-zinc-400">{showcaseItems.length} item{showcaseItems.length === 1 ? '' : 's'}</span>
+                  </div>
+
+                  {showcaseItems.length === 0 ? (
+                    <div className="rounded-3xl border border-dashed border-white/10 p-8 text-center text-zinc-500">
+                      No showcase photos added yet.
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                      {showcaseItems.map((item) => (
+                        <article key={item.id} className="rounded-3xl border border-white/10 bg-white/5 overflow-hidden">
+                          <div className="aspect-square overflow-hidden bg-zinc-900">
+                            <img src={item.imageUrl} alt={item.title || item.category} className="h-full w-full object-cover" />
+                          </div>
+                          <div className="p-4 space-y-2">
+                            <p className="text-xs uppercase tracking-[0.35em] text-emerald-400">{item.category}</p>
+                            {item.title && <h4 className="text-lg font-semibold text-zinc-50">{item.title}</h4>}
+                            {item.description && <p className="text-sm text-zinc-400 line-clamp-2">{item.description}</p>}
+                            <p className="text-xs text-zinc-500">{item.productName || 'Unlinked product'}</p>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteShowcaseItem(item.id)}
+                              className="mt-3 rounded-full border border-rose-400/30 px-3 py-2 text-xs font-bold uppercase tracking-[0.3em] text-rose-200 hover:border-rose-300"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {activeTab === 'users' && (
               <div className="rounded-4xl border border-white/10 bg-slate-950/80 p-6 md:p-8">
                 <div className="flex items-center justify-between gap-4 mb-6">
@@ -944,7 +1217,7 @@ export default function Admin() {
                 </div>
 
                 <div className="space-y-4 max-h-136 overflow-auto pr-1">
-                  {customerUsers.map((user) => (
+                  {accountUsers.map((user) => (
                     <div key={user.uid} className="rounded-3xl border border-white/10 bg-white/5 p-4">
                       <div className="flex items-start justify-between gap-4">
                         <div>
@@ -997,9 +1270,9 @@ export default function Admin() {
                     </p>
                   )}
 
-                  {customerUsers.length === 0 && (
+                  {accountUsers.length === 0 && (
                     <div className="rounded-3xl border border-dashed border-white/10 p-8 text-center text-zinc-500">
-                      No customer accounts are available.
+                      No user accounts are available.
                     </div>
                   )}
                 </div>

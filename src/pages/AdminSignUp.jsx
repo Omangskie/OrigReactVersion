@@ -14,10 +14,8 @@ const AdminSignUp = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [registeringAdmin, setRegisteringAdmin] = useState(false);
 
   const {
     authReady,
@@ -25,6 +23,7 @@ const AdminSignUp = () => {
     userProfile,
     users,
     signUpNewUser,
+    setUserRole,
     isConfiguredAdminEmail,
   } = useUserAuth();
 
@@ -36,7 +35,7 @@ const AdminSignUp = () => {
   );
 
   useEffect(() => {
-    if (!authReady || !session || loading || registeringAdmin) {
+    if (!authReady || !session || loading) {
       return;
     }
 
@@ -51,7 +50,7 @@ const AdminSignUp = () => {
     }
 
     navigate("/homepage", { replace: true });
-  }, [authReady, loading, registeringAdmin, navigate, session, userProfile, isConfiguredAdminEmail]);
+  }, [authReady, loading, navigate, session, userProfile, isConfiguredAdminEmail]);
 
   const checks = passwordChecks(password);
   const validPassword = Object.values(checks).every(Boolean);
@@ -73,7 +72,6 @@ const AdminSignUp = () => {
     }
 
     setLoading(true);
-    setRegisteringAdmin(true);
     try {
       const result = await signUpNewUser(email, password, { role: "admin" });
 
@@ -82,18 +80,11 @@ const AdminSignUp = () => {
         return;
       }
 
-      const uid = result?.data?.user?.uid;
-
-      if (uid) {
-        await setUserRole(uid, "admin");
-      }
-
       navigate("/admin", { replace: true });
     } catch (signupError) {
       setError(signupError?.message || "Unable to create admin account.");
     } finally {
       setLoading(false);
-      setRegisteringAdmin(false);
     }
   };
 
@@ -125,32 +116,23 @@ const AdminSignUp = () => {
 
           <div>
             <label htmlFor="admin-signup-password" className="block text-sm text-zinc-300 mb-2">Password</label>
-            <div className="relative">
-              <input
-                id="admin-signup-password"
-                type={showPassword ? "text" : "password"}
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 pr-28 text-zinc-100 focus:outline-none focus:border-emerald-400"
-                placeholder="Strong password"
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((prev) => !prev)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold uppercase tracking-wide text-zinc-300 hover:text-emerald-300"
-              >
-                {showPassword ? "Hide" : "Show"}
-              </button>
-            </div>
+            <input
+              id="admin-signup-password"
+              type="password"
+              required
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-100 focus:outline-none focus:border-emerald-400"
+              placeholder="Strong password"
+              autoComplete="new-password"
+            />
           </div>
 
           <div>
             <label htmlFor="admin-signup-confirm" className="block text-sm text-zinc-300 mb-2">Confirm password</label>
             <input
               id="admin-signup-confirm"
-              type={showPassword ? "text" : "password"}
+              type="password"
               required
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}

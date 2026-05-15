@@ -36,6 +36,7 @@ export const Layout = () => {
         
         <div className="hidden md:flex items-center gap-8 text-sm font-medium tracking-wide pointer-events-auto">
           <Link to="/shop" className="hover:text-emerald-400 transition-colors">SHOP</Link>
+          <Link to="/showcase" className="hover:text-emerald-400 transition-colors">SHOWCASE</Link>
           <Link to="/tracking" className="hover:text-emerald-400 transition-colors">TRACKING</Link>
           {isAdmin && (
             <Link to="/admin" className="hover:text-emerald-400 transition-colors">ADMIN</Link>

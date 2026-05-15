@@ -17,7 +17,15 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASURE_ID
 };
 
-
+// const firebaseConfig = {
+//   apiKey: "AIzaSyBHy4gnb-gf4Hf6O7bLno1ReNo_REduGoU",
+//   authDomain: "originals-website.firebaseapp.com",
+//   projectId: "originals-website",
+//   storageBucket: "originals-website.firebasestorage.app",
+//   messagingSenderId: "368704000921",
+//   appId: "1:368704000921:web:5cfca95d6ad861bd9fb908",
+//   measurementId: "G-J8RYV0HCP9"
+// };
 
 // Initialize Firebase
 export const app = initializeApp(firebaseConfig);

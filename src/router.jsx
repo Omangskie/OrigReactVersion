@@ -8,6 +8,7 @@ import { ProductDetail } from "./pages/Product";
 import { Cart } from "./pages/Cart";
 import { Checkout } from "./pages/Checkout";
 import { Tracking } from "./pages/Tracking";
+import { Showcase } from "./pages/Showcase";
 import PrivateRoute from "./pages/PrivateRoute";
 import AdminRoute from "./pages/AdminRoute";
 import Admin from "./pages/Admin";
@@ -39,6 +40,7 @@ export const router = createBrowserRouter([
         ),
       },
       { path: "/shop", element: <Shop /> },
+      { path: "/showcase", element: <Showcase /> },
       { path: "/product/:id", element: <ProductDetail /> },
       { path: "/cart", element: <Cart /> },
       { path: "/checkout", element: <Checkout /> },
