@@ -2,10 +2,13 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useUserAuth } from "../auth/AuthContext";
 
+const REMEMBERED_ADMIN_CREDENTIALS_KEY = "rememberedAdminCredentials";
+
 const AdminSignIn = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -22,6 +25,26 @@ const AdminSignIn = () => {
     }
   }, [authReady, navigate, session, userProfile, isConfiguredAdminEmail]);
 
+  useEffect(() => {
+    const savedCredentials = localStorage.getItem(REMEMBERED_ADMIN_CREDENTIALS_KEY);
+    if (!savedCredentials) {
+      return;
+    }
+
+    try {
+      const parsedCredentials = JSON.parse(savedCredentials);
+      if (parsedCredentials?.email) {
+        setEmail(parsedCredentials.email);
+      }
+      if (parsedCredentials?.password) {
+        setPassword(parsedCredentials.password);
+      }
+      setRememberMe(true);
+    } catch (storageError) {
+      localStorage.removeItem(REMEMBERED_ADMIN_CREDENTIALS_KEY);
+    }
+  }, []);
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
@@ -33,6 +56,15 @@ const AdminSignIn = () => {
       if (!result.success) {
         setError(result.error || "Unable to sign in.");
         return;
+      }
+
+      if (rememberMe) {
+        localStorage.setItem(
+          REMEMBERED_ADMIN_CREDENTIALS_KEY,
+          JSON.stringify({ email, password })
+        );
+      } else {
+        localStorage.removeItem(REMEMBERED_ADMIN_CREDENTIALS_KEY);
       }
 
       const isAdminAccount =
@@ -98,6 +130,19 @@ const AdminSignIn = () => {
                 {showPassword ? "Hide" : "Show"}
               </button>
             </div>
+          </div>
+
+          <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-zinc-300">
+            <input
+              id="admin-remember-me"
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(event) => setRememberMe(event.target.checked)}
+              className="h-4 w-4 rounded border-zinc-600 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
+            />
+            <label htmlFor="admin-remember-me" className="cursor-pointer text-sm text-zinc-200">
+              Remember me
+            </label>
           </div>
 
           {error && (

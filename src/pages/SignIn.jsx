@@ -2,6 +2,8 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useUserAuth } from "../auth/AuthContext";
 
+const REMEMBERED_USER_CREDENTIALS_KEY = "rememberedUserCredentials";
+
 const SignIn = () => {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -39,10 +41,22 @@ const SignIn = () => {
     const navigate =  useNavigate();
 
     useEffect(() => {
-        const savedEmail = localStorage.getItem("rememberedEmail");
-        if (savedEmail) {
-            setEmail(savedEmail);
+        const savedCredentials = localStorage.getItem(REMEMBERED_USER_CREDENTIALS_KEY);
+        if (!savedCredentials) {
+            return;
+        }
+
+        try {
+            const parsedCredentials = JSON.parse(savedCredentials);
+            if (parsedCredentials?.email) {
+                setEmail(parsedCredentials.email);
+            }
+            if (parsedCredentials?.password) {
+                setPassword(parsedCredentials.password);
+            }
             setRememberMe(true);
+        } catch (error) {
+            localStorage.removeItem(REMEMBERED_USER_CREDENTIALS_KEY);
         }
     }, []);
 
@@ -56,9 +70,12 @@ const SignIn = () => {
             const result = await signInUser(email, password);
             if (result.success) {
                 if (rememberMe) {
-                    localStorage.setItem("rememberedEmail", email);
+                    localStorage.setItem(
+                        REMEMBERED_USER_CREDENTIALS_KEY,
+                        JSON.stringify({ email, password })
+                    );
                 } else {
-                    localStorage.removeItem("rememberedEmail");
+                    localStorage.removeItem(REMEMBERED_USER_CREDENTIALS_KEY);
                 }
                 console.log("User signed in successfully:", result.data);
                 navigate(result.profile?.role === "admin" ? "/admin" : "/homepage");
