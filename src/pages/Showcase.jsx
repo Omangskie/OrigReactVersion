@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Link } from 'react-router-dom';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { getFirestore } from 'firebase/firestore';
-import { app } from '../config/FirebaseConfig';
+
+const API_ORIGIN = import.meta.env.VITE_API_ORIGIN || `${window.location.protocol}//${window.location.hostname}:8787`;
 
 export const SHOWCASE_CATEGORIES = [
   'Tarpaulin',
@@ -20,30 +19,43 @@ export const Showcase = () => {
   const [showcaseItems, setShowcaseItems] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState(SHOWCASE_CATEGORIES[0]);
   const [loading, setLoading] = useState(true);
-  const db = getFirestore(app);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    const showcaseCollection = collection(db, 'showcase');
-    const showcaseQuery = query(showcaseCollection, where('category', '==', selectedCategory));
+    let mounted = true;
+    setLoading(true);
+    setError('');
 
-    const unsubscribe = onSnapshot(
-      showcaseQuery,
-      (snapshot) => {
-        const items = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-        setShowcaseItems(items);
-        setLoading(false);
-      },
-      (error) => {
-        console.error('Error loading showcase items:', error);
-        setLoading(false);
+    const controller = new AbortController();
+
+    const fetchItems = async () => {
+      try {
+        const q = `${API_ORIGIN}/api/showcase`;
+        const resp = await fetch(q, { signal: controller.signal });
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          throw new Error(body?.message || `Request failed with status ${resp.status}`);
+        }
+        const body = await resp.json();
+        if (!mounted) return;
+        const allItems = Array.isArray(body.items) ? body.items : [];
+        setShowcaseItems(allItems.filter((item) => item.category === selectedCategory));
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.error('Error loading showcase items:', err);
+        if (mounted) setError(err?.message || 'Unable to load showcase items.');
+      } finally {
+        if (mounted) setLoading(false);
       }
-    );
+    };
 
-    return () => unsubscribe();
-  }, [selectedCategory, db]);
+    fetchItems();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [selectedCategory]);
 
   return (
     <div className="px-6 md:px-12 py-12 max-w-7xl mx-auto">

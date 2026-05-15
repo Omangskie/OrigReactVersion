@@ -68,10 +68,22 @@ const ensureApp = () => {
     throw new Error('Firebase Admin credentials are missing on the server. See server logs for instructions.');
   }
 
-  return initializeApp({
+  // Determine storage bucket: prefer explicit env var, then try common defaults.
+  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || (credentials.projectId ? `${credentials.projectId}.firebasestorage.app` : undefined);
+
+  const initConfig = {
     credential: cert(credentials),
     projectId: credentials.projectId,
-  });
+  };
+
+  if (storageBucket) {
+    initConfig.storageBucket = storageBucket;
+    console.log('Firebase Admin storage bucket set to', storageBucket);
+  } else {
+    console.warn('Firebase Admin storage bucket not configured explicitly; some Storage operations may fail.');
+  }
+
+  return initializeApp(initConfig);
 };
 
 export const getFirebaseAdmin = () => {

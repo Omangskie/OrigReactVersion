@@ -5,13 +5,14 @@ import { ArchiveRestore, BarChart3, ShieldCheck, ShoppingBag, Users, UserRoundCo
 import { Link } from 'react-router-dom';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { addDoc, collection, deleteDoc, doc, getFirestore, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, getFirestore } from 'firebase/firestore';
 import { getDownloadURL, getStorage, ref, uploadBytes } from 'firebase/storage';
 import { app } from '../config/FirebaseConfig';
 import { useUserAuth } from '../auth/AuthContext';
 import { useStore } from '../context/StoreContext';
 import PricingForm from '../components/admin/PricingForm';
 import { SHOWCASE_CATEGORIES } from './Showcase';
+const API_ORIGIN = import.meta.env.VITE_API_ORIGIN || `${window.location.protocol}//${window.location.hostname}:8787`;
 
 export default function Admin() {
   const { session, userProfile, users, signOut, suspendUser, deleteUser, restoreUser, setUserRole } = useUserAuth();
@@ -93,21 +94,31 @@ export default function Admin() {
   }, [activeProducts]);
 
   useEffect(() => {
-    const collectionRef = collection(db, 'showcase');
-    const snapshotQuery = query(collectionRef, orderBy('createdAt', 'desc'));
+    let mounted = true;
 
-    const unsubscribe = onSnapshot(
-      snapshotQuery,
-      (snapshot) => {
-        setShowcaseItems(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
-      },
-      (error) => {
+    const loadShowcaseItems = async () => {
+      try {
+        const response = await fetch(`${API_ORIGIN}/api/showcase`);
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body?.message || `Request failed with status ${response.status}`);
+        }
+
+        const body = await response.json();
+        if (!mounted) return;
+        setShowcaseItems(Array.isArray(body.items) ? body.items : []);
+      } catch (error) {
+        if (!mounted) return;
         console.error('Unable to sync showcase items:', error);
       }
-    );
+    };
 
-    return () => unsubscribe();
-  }, [db]);
+    loadShowcaseItems();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     setOrderStatusDrafts((previousDrafts) => {
@@ -270,6 +281,13 @@ export default function Admin() {
   const handleCreateShowcaseItem = async (event) => {
     event.preventDefault();
 
+    // Prevent non-admins from attempting uploads — avoids repeated storage permission errors.
+    if (!userProfile || (userProfile.role !== 'admin' && !isConfiguredAdminEmail(session?.email || ''))) {
+      setShowcaseMessage('You are not recognized as an admin. Ensure your account has role="admin" in Firestore or your email is added to admin list.');
+      window.setTimeout(() => setShowcaseMessage(''), 5000);
+      return;
+    }
+
     if (!showcaseForm.category || !showcaseForm.productId || (!showcaseForm.imageFile && !showcaseForm.imageUrl)) {
       setShowcaseMessage('Please select a category, product, and upload an image or provide a URL.');
       window.setTimeout(() => setShowcaseMessage(''), 4000);
@@ -279,22 +297,62 @@ export default function Admin() {
     setSavingShowcase(true);
     try {
       let storedImageUrl = showcaseForm.imageUrl;
+      let serverCreatedItem = null;
 
       if (showcaseForm.imageFile) {
-        const storageRef = ref(storage, `showcase/${Date.now()}-${showcaseForm.imageFile.name}`);
-        await uploadBytes(storageRef, showcaseForm.imageFile);
-        storedImageUrl = await getDownloadURL(storageRef);
+        // Always use server-side upload to avoid client storage permission issues.
+        const actorToken = await session.getIdToken();
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('Failed to read file for server upload.'));
+          reader.readAsDataURL(showcaseForm.imageFile);
+        });
+
+        const resp = await fetch(`${API_ORIGIN}/api/showcase/upload`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            actorToken,
+            fileName: showcaseForm.imageFile.name,
+            dataUrl,
+            category: showcaseForm.category,
+            productId: showcaseForm.productId,
+            productName: activeProducts.find((product) => product.id === showcaseForm.productId)?.name || '',
+            title: showcaseForm.title.trim(),
+            description: showcaseForm.description.trim(),
+          }),
+        });
+
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          throw new Error(body?.message || `Server upload failed with status ${resp.status}`);
+        }
+
+        const body = await resp.json();
+        serverCreatedItem = body?.item || null;
+        storedImageUrl = serverCreatedItem?.imageUrl || storedImageUrl;
       }
 
-      await addDoc(collection(db, 'showcase'), {
-        category: showcaseForm.category,
-        productId: showcaseForm.productId,
-        productName: activeProducts.find((product) => product.id === showcaseForm.productId)?.name || '',
-        title: showcaseForm.title.trim(),
-        description: showcaseForm.description.trim(),
-        imageUrl: storedImageUrl,
-        createdAt: new Date().toISOString(),
-      });
+      // If the server already created the showcase item, skip client-side write.
+      // The server upload endpoint returns the created item as `item` when used.
+      if (!storedImageUrl) {
+        throw new Error('No image URL available after upload.');
+      }
+
+      // If `serverCreatedItem` is set by the upload response, the server already
+      // created the Firestore document. Otherwise, create it from the client.
+      if (!serverCreatedItem) {
+        await addDoc(collection(db, 'showcase'), {
+          category: showcaseForm.category,
+          productId: showcaseForm.productId,
+          productName: activeProducts.find((product) => product.id === showcaseForm.productId)?.name || '',
+          title: showcaseForm.title.trim(),
+          description: showcaseForm.description.trim(),
+          imageUrl: storedImageUrl,
+          createdAt: new Date().toISOString(),
+        });
+      }
 
       resetShowcaseForm();
       setShowcaseMessage('Showcase photo uploaded successfully.');

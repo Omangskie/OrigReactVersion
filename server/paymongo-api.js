@@ -312,6 +312,53 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+// Public endpoint to return showcase items using Firebase Admin SDK.
+// Supports optional filtering by category via the `category` query param.
+app.get('/api/showcase', async (req, res) => {
+  try {
+    const { db } = getFirebaseAdmin();
+    const category = typeof req.query?.category === 'string' && req.query.category.trim() ? req.query.category.trim() : '';
+    console.log('/api/showcase request, category=', category || '<all>');
+
+    let queryRef = db.collection('showcase').orderBy('createdAt', 'desc');
+    if (category) {
+      queryRef = queryRef.where('category', '==', category);
+    }
+
+    let items = [];
+    try {
+      const snapshot = await queryRef.get();
+      items = snapshot.docs.map((doc) => ({ id: doc.id, ...(doc.data() || {}) }));
+      console.log('/api/showcase returning', items.length, 'items (query)');
+      return res.json({ ok: true, items });
+    } catch (queryError) {
+      console.warn('/api/showcase query failed, falling back to client-side filter. Error:', queryError?.message || queryError);
+      // If the composite index is missing, fall back to fetching all documents and filtering/sorting in code.
+      try {
+        const allSnapshot = await db.collection('showcase').get();
+        items = allSnapshot.docs.map((doc) => ({ id: doc.id, ...(doc.data() || {}) }));
+        if (category) {
+          items = items.filter((it) => String(it.category || '') === String(category));
+        }
+        // sort by createdAt desc if present
+        items.sort((a, b) => {
+          const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
+          const tb = b.createdAt ? Date.parse(b.createdAt) : 0;
+          return tb - ta;
+        });
+        console.log('/api/showcase returning', items.length, 'items (fallback)');
+        return res.json({ ok: true, items });
+      } catch (fallbackError) {
+        console.error('Fallback /api/showcase error:', fallbackError);
+        return res.status(500).json({ ok: false, message: fallbackError?.message || 'Unable to load showcase items.' });
+      }
+    }
+  } catch (error) {
+    console.error('Server /api/showcase error:', error);
+    return res.status(500).json({ ok: false, message: error?.message || 'Unable to load showcase items.' });
+  }
+});
+
 app.post('/api/auth/send-otp', async (req, res) => {
   const email = normalizeEmail(req.body?.email);
 
@@ -784,4 +831,62 @@ app.get('/api/payments/status/:reference', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`PayMongo API listening on http://localhost:${port}`);
+});
+
+// Admin-only endpoint: upload a showcase image via Firebase Admin SDK and create showcase doc.
+app.post('/api/showcase/upload', async (req, res) => {
+  try {
+    const actorToken = String(req.body?.actorToken || '').trim();
+    if (!actorToken) return res.status(401).json({ message: 'actorToken is required.' });
+
+    const { auth: adminAuth, db: adminDb, storage } = getFirebaseAdmin();
+    const decoded = await adminAuth.verifyIdToken(actorToken);
+    const actorProfileSnapshot = await adminDb.collection('users').doc(decoded.uid).get();
+    const actorProfile = actorProfileSnapshot.exists ? actorProfileSnapshot.data() : null;
+    const actorEmail = normalizeEmail(decoded.email || '');
+    const canCreate = isActiveAdmin(actorProfile) || allowedAdminEmails.includes(actorEmail);
+
+    if (!canCreate) return res.status(403).json({ message: 'Only admin users may upload showcase items.' });
+
+    const fileName = String(req.body?.fileName || 'showcase-image').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const dataUrl = String(req.body?.dataUrl || '').trim();
+    if (!dataUrl) return res.status(400).json({ message: 'dataUrl is required.' });
+
+    const safeFileName = `${Date.now()}-${fileName}`;
+    const storagePath = `showcase/${safeFileName}`;
+
+    const { buffer, contentType } = parseDataUrl(dataUrl);
+    const file = storage.bucket().file(storagePath);
+    const downloadToken = crypto.randomUUID();
+
+    await file.save(buffer, {
+      resumable: false,
+      metadata: {
+        contentType,
+        metadata: {
+          firebaseStorageDownloadTokens: downloadToken,
+        },
+      },
+    });
+
+    const publicUrl = `https://firebasestorage.googleapis.com/v0/b/${storage.bucket().name}/o/${encodeURIComponent(storagePath)}?alt=media&token=${downloadToken}`;
+
+    const item = {
+      category: String(req.body?.category || ''),
+      productId: String(req.body?.productId || ''),
+      productName: String(req.body?.productName || ''),
+      title: String(req.body?.title || '').trim(),
+      description: String(req.body?.description || '').trim(),
+      imageUrl: publicUrl,
+      createdAt: new Date().toISOString(),
+    };
+
+    const docRef = adminDb.collection('showcase').doc();
+    await docRef.set(item);
+
+    return res.json({ ok: true, item: { id: docRef.id, ...item } });
+  } catch (error) {
+    console.error('/api/showcase/upload error:', error);
+    return res.status(500).json({ ok: false, message: error?.message || 'Unable to upload showcase file.' });
+  }
 });
