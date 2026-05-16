@@ -7,6 +7,8 @@ import { addDoc, collection, doc, getFirestore, onSnapshot, query, updateDoc, wh
 import { getAuth } from 'firebase/auth';
 import { getDownloadURL, getStorage, ref, uploadBytes } from 'firebase/storage';
 
+const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/$/, '');
+
 const StoreContext = createContext(undefined);
 
 const CATALOG_STORAGE_KEY = 'theoriginals.catalog';
@@ -501,7 +503,25 @@ export const StoreProvider = ({ children }) => {
     }
 
     try {
-      await updateDoc(doc(db, 'orders', order.firestoreId), { status: 'Cancelled' });
+      const actorToken = await auth.currentUser?.getIdToken();
+
+      if (!actorToken) {
+        return false;
+      }
+
+      const response = await fetch(`${API_ORIGIN}/api/orders/cancel`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${actorToken}`,
+        },
+        body: JSON.stringify({ orderId: order.firestoreId }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body?.message || `Unable to cancel order. (${response.status})`);
+      }
 
       setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: 'Cancelled' } : o)));
       return true;
