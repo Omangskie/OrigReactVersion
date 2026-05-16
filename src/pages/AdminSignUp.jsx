@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useUserAuth } from "../auth/AuthContext";
 
@@ -10,6 +10,9 @@ const passwordChecks = (password) => ({
   symbol: /[^A-Za-z0-9]/.test(password),
 });
 
+const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN || "").replace(/\/$/, "");
+const ADMIN_CREATE_ENDPOINT = `${API_ORIGIN}/api/admin/create-user`;
+
 const AdminSignUp = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -17,41 +20,20 @@ const AdminSignUp = () => {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const {
-    authReady,
-    session,
-    userProfile,
-    users,
-    signUpNewUser,
-    setUserRole,
-    isConfiguredAdminEmail,
-  } = useUserAuth();
-
+  const { authReady, session, userProfile } = useUserAuth();
   const navigate = useNavigate();
 
-  const hasExistingAdmin = useMemo(
-    () => users.some((user) => user.role === "admin" && user.status !== "deleted"),
-    [users]
-  );
-  const isCurrentAdmin = userProfile?.role === "admin" || isConfiguredAdminEmail(session?.email || "");
+  const isCurrentAdmin = Boolean(session?.uid) && userProfile?.role === "admin";
 
   useEffect(() => {
-    if (!authReady || !session || loading) {
+    if (!authReady || loading) {
       return;
     }
 
-    if (!userProfile) {
-      return;
+    if (!isCurrentAdmin) {
+      navigate("/admin/signin", { replace: true });
     }
-
-    const isAdmin = userProfile?.role === "admin" || isConfiguredAdminEmail(session.email);
-    if (isAdmin) {
-      navigate("/admin", { replace: true });
-      return;
-    }
-
-    navigate("/homepage", { replace: true });
-  }, [authReady, loading, navigate, session, userProfile, isConfiguredAdminEmail]);
+  }, [authReady, isCurrentAdmin, loading, navigate]);
 
   const checks = passwordChecks(password);
   const validPassword = Object.values(checks).every(Boolean);
@@ -67,21 +49,34 @@ const AdminSignUp = () => {
       return;
     }
 
-    if (hasExistingAdmin && !isCurrentAdmin && !isConfiguredAdminEmail(email)) {
-      setError("This email is not allowed to self-register as admin.");
+    if (!isCurrentAdmin) {
+      setError("Sign in as an admin to create another admin account.");
       return;
     }
 
     setLoading(true);
     try {
-      const result = await signUpNewUser(email, password, { role: "admin" });
+      const actorToken = await session.getIdToken();
+      const response = await fetch(ADMIN_CREATE_ENDPOINT || "/api/admin/create-user", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${actorToken}`,
+        },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          password,
+          role: "admin",
+        }),
+      });
 
-      if (!result.success) {
-        setError(result.error || "Unable to create admin account.");
-        return;
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload?.message || "Unable to create admin account.");
       }
 
-      navigate(result.profile?.role === "admin" ? "/admin" : "/homepage", { replace: true });
+      navigate("/admin", { replace: true });
     } catch (signupError) {
       setError(signupError?.message || "Unable to create admin account.");
     } finally {
@@ -95,11 +90,7 @@ const AdminSignUp = () => {
         <p className="text-xs uppercase tracking-[0.35em] text-emerald-400">Admin Registration</p>
         <h1 className="mt-3 text-3xl font-black uppercase tracking-tight">Create Admin Account</h1>
         <p className="mt-3 text-sm text-zinc-400">
-          {hasExistingAdmin
-            ? isCurrentAdmin
-              ? "You are signed in as an admin. You can create additional admin accounts from this page."
-              : "Only allowlisted admin emails can self-register here."
-            : "No admin exists yet. The first account created here becomes admin."}
+          Create a new admin account while signed in as an existing admin.
         </p>
 
         <form onSubmit={handleSubmit} className="mt-8 space-y-4">
@@ -147,7 +138,7 @@ const AdminSignUp = () => {
 
           <div>
             <p className="mt-2 text-xs text-zinc-500">
-              This form always creates an admin account. Once an admin exists, only allowlisted emails can use it.
+              This form creates another admin and stores it in Firestore using the server admin API.
             </p>
           </div>
 
