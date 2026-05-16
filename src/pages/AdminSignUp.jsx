@@ -14,7 +14,6 @@ const AdminSignUp = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [role, setRole] = useState("admin");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -67,14 +66,14 @@ const AdminSignUp = () => {
       return;
     }
 
-    if (role === "admin" && hasExistingAdmin && !isConfiguredAdminEmail(email)) {
+    if (hasExistingAdmin && !isConfiguredAdminEmail(email)) {
       setError("This email is not allowed to self-register as admin.");
       return;
     }
 
     setLoading(true);
     try {
-      const result = await signUpNewUser(email, password, { role });
+      const result = await signUpNewUser(email, password, { role: "admin" });
 
       if (!result.success) {
         setError(result.error || "Unable to create admin account.");
@@ -144,18 +143,8 @@ const AdminSignUp = () => {
           </div>
 
           <div>
-            <label htmlFor="admin-signup-role" className="block text-sm text-zinc-300 mb-2">Account role</label>
-            <select
-              id="admin-signup-role"
-              value={role}
-              onChange={(event) => setRole(event.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-100 focus:outline-none focus:border-emerald-400"
-            >
-              <option value="admin">Admin</option>
-              <option value="collaborator">Collaborator</option>
-            </select>
             <p className="mt-2 text-xs text-zinc-500">
-              Admin roles require an allowlisted email once an admin already exists.
+              This form always creates an admin account. Once an admin exists, only allowlisted emails can use it.
             </p>
           </div>
 
