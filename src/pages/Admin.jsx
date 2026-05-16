@@ -12,7 +12,7 @@ import { useUserAuth } from '../auth/AuthContext';
 import { useStore } from '../context/StoreContext';
 import PricingForm from '../components/admin/PricingForm';
 import { SHOWCASE_CATEGORIES } from './Showcase';
-const API_ORIGIN = import.meta.env.VITE_API_ORIGIN || `${window.location.protocol}//${window.location.hostname}:8787`;
+const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/$/, '');
 
 export default function Admin() {
   const { session, userProfile, users, signOut, suspendUser, deleteUser, restoreUser, setUserRole } = useUserAuth();

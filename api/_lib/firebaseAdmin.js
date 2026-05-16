@@ -1,6 +1,7 @@
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
 
 const parseAdminEmails = () =>
   (process.env.ADMIN_EMAILS || process.env.VITE_ADMIN_EMAILS || process.env.VITE_ADMIN_EMAIL || "")
@@ -39,10 +40,18 @@ const ensureApp = () => {
     throw new Error("Firebase Admin credentials are missing on the server.");
   }
 
-  return initializeApp({
+  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || (credentials.projectId ? `${credentials.projectId}.firebasestorage.app` : undefined);
+
+  const initConfig = {
     credential: cert(credentials),
     projectId: credentials.projectId,
-  });
+  };
+
+  if (storageBucket) {
+    initConfig.storageBucket = storageBucket;
+  }
+
+  return initializeApp(initConfig);
 };
 
 export const getFirebaseAdmin = () => {
@@ -50,6 +59,7 @@ export const getFirebaseAdmin = () => {
   return {
     auth: getAuth(app),
     db: getFirestore(app),
+    storage: getStorage(app),
   };
 };
 
