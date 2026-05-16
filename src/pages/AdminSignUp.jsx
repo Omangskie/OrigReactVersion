@@ -33,6 +33,7 @@ const AdminSignUp = () => {
     () => users.some((user) => user.role === "admin" && user.status !== "deleted"),
     [users]
   );
+  const isCurrentAdmin = userProfile?.role === "admin" || isConfiguredAdminEmail(session?.email || "");
 
   useEffect(() => {
     if (!authReady || !session || loading) {
@@ -66,7 +67,7 @@ const AdminSignUp = () => {
       return;
     }
 
-    if (hasExistingAdmin && !isConfiguredAdminEmail(email)) {
+    if (hasExistingAdmin && !isCurrentAdmin && !isConfiguredAdminEmail(email)) {
       setError("This email is not allowed to self-register as admin.");
       return;
     }
@@ -95,7 +96,9 @@ const AdminSignUp = () => {
         <h1 className="mt-3 text-3xl font-black uppercase tracking-tight">Create Admin Account</h1>
         <p className="mt-3 text-sm text-zinc-400">
           {hasExistingAdmin
-            ? "Only allowlisted admin emails can self-register here."
+            ? isCurrentAdmin
+              ? "You are signed in as an admin. You can create additional admin accounts from this page."
+              : "Only allowlisted admin emails can self-register here."
             : "No admin exists yet. The first account created here becomes admin."}
         </p>
 
