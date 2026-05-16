@@ -154,7 +154,7 @@ const SignUp = () => {
             const response = await fetch("/api/auth/verify-otp", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email: email.trim().toLowerCase(), code: otpCode.trim() }),
+                body: JSON.stringify({ email: email.trim().toLowerCase(), code: otpCode.trim(), action: 'signup' }),
             });
             const raw = await response.text();
             const data = parseApiPayload(raw);
