@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 // eslint-disable-next-line no-unused-vars
 import { motion } from 'motion/react';
 import { ArchiveRestore, BarChart3, ShieldCheck, ShoppingBag, Users, UserRoundCog, Upload, DollarSign, Plus, Download, CircleCheckBig, CircleX } from 'lucide-react';
@@ -15,7 +15,7 @@ import { SHOWCASE_CATEGORIES } from './Showcase';
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/$/, '');
 
 export default function Admin() {
-  const { session, userProfile, users, signOut, suspendUser, deleteUser, restoreUser, setUserRole } = useUserAuth();
+  const { session, userProfile, signOut, suspendUser, deleteUser, restoreUser, setUserRole } = useUserAuth();
   const {
     activeProducts,
     archivedProducts,
@@ -69,11 +69,55 @@ export default function Admin() {
   const [savingShowcase, setSavingShowcase] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [paymentApprovalDrafts, setPaymentApprovalDrafts] = useState({});
+  const [firebaseUsers, setFirebaseUsers] = useState([]);
 
   const db = getFirestore(app);
   const storage = getStorage(app);
 
-  const accountUsers = useMemo(() => users.filter((user) => user.role !== 'admin'), [users]);
+  const loadFirebaseUsers = useCallback(async () => {
+    if (!session?.uid) {
+      setFirebaseUsers([]);
+      return;
+    }
+
+    const actorToken = await session.getIdToken();
+    const response = await fetch(`${API_ORIGIN}/api/admin/users`, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${actorToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body?.message || `Unable to load Firebase users. (${response.status})`);
+    }
+
+    const body = await response.json();
+    setFirebaseUsers(Array.isArray(body.users) ? body.users : []);
+  }, [session]);
+
+  const accountUsers = useMemo(() => firebaseUsers.filter((user) => user.role !== 'admin'), [firebaseUsers]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const syncUsers = async () => {
+      try {
+        await loadFirebaseUsers();
+      } catch (error) {
+        if (!mounted) return;
+        console.error('Unable to sync users from Firebase:', error);
+        setFirebaseUsers([]);
+      }
+    };
+
+    syncUsers();
+
+    return () => {
+      mounted = false;
+    };
+  }, [loadFirebaseUsers]);
 
   useEffect(() => {
     if (activeProducts.length === 0) {
@@ -173,11 +217,11 @@ export default function Admin() {
       const paymentStatus = order.payment?.status;
       return !paymentStatus || paymentStatus === 'approved';
     });
-    const registeredUsers = users.length;
-    const activeUsers = users.filter((user) => user.status === 'active').length;
-    const suspendedUsers = users.filter((user) => user.status === 'suspended').length;
-    const deletedUsers = users.filter((user) => user.status === 'deleted').length;
-    const collaborators = users.filter((user) => user.role === 'collaborator' && user.status === 'active').length;
+    const registeredUsers = firebaseUsers.length;
+    const activeUsers = firebaseUsers.filter((user) => user.status === 'active').length;
+    const suspendedUsers = firebaseUsers.filter((user) => user.status === 'suspended').length;
+    const deletedUsers = firebaseUsers.filter((user) => user.status === 'deleted').length;
+    const collaborators = firebaseUsers.filter((user) => user.role === 'collaborator' && user.status === 'active').length;
     const soldItems = approvedOrders.reduce((sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.quantity, 0), 0);
     const revenueFromNormalUsers = approvedOrders
       .filter((order) => order.purchaserRole !== 'admin')
@@ -199,7 +243,7 @@ export default function Admin() {
       categoryTotals,
       approvedOrders,
     };
-  }, [activeProducts, orders, users]);
+  }, [activeProducts, firebaseUsers, orders]);
 
   const handleProductAction = async (productId, action) => {
     setBusyProductId(productId);
@@ -239,6 +283,8 @@ export default function Admin() {
       if (action === 'customer') {
         await setUserRole(userId, 'customer');
       }
+
+      await loadFirebaseUsers();
     } catch (error) {
       setUserMessage(error?.message || 'Unable to complete user action.');
       window.setTimeout(() => setUserMessage(''), 3500);
