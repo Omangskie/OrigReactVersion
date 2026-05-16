@@ -67,16 +67,7 @@ service cloud.firestore {
         && resource.data.purchaserUid == request.auth.uid
         && (resource.data.status == 'Pending Payment Approval' || resource.data.status == 'Processing')
         && request.resource.data.status == 'Cancelled'
-        && request.resource.data.purchaserUid == resource.data.purchaserUid
-        && request.resource.data.id == resource.data.id
-        && request.resource.data.total == resource.data.total
-        && request.resource.data.date == resource.data.date
-        && request.resource.data.estimatedDelivery == resource.data.estimatedDelivery
-        && request.resource.data.purchaserRole == resource.data.purchaserRole
-        && request.resource.data.purchaserEmail == resource.data.purchaserEmail
-        && request.resource.data.shipping == resource.data.shipping
-        && request.resource.data.payment == resource.data.payment
-        && request.resource.data.items == resource.data.items;
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['status']);
     }
 
     match /orders/{orderDocId} {
