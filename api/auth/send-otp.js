@@ -18,14 +18,20 @@ export default async function handler(req, res) {
 
     const { auth, db } = getFirebaseAdmin();
 
-    try {
-      await auth.getUserByEmail(email);
-    } catch (error) {
-      if (error?.code === "auth/user-not-found") {
-        return res.status(404).json({ message: "No account found with this email address." });
-      }
+    // If caller indicates this is a signup flow, do NOT require an existing account.
+    const action = String(req.body?.action || req.query?.action || req.query?.mode || '').toLowerCase();
+    const isSignupFlow = action === 'signup';
 
-      throw error;
+    if (!isSignupFlow) {
+      try {
+        await auth.getUserByEmail(email);
+      } catch (error) {
+        if (error?.code === "auth/user-not-found") {
+          return res.status(404).json({ message: "No account found with this email address." });
+        }
+
+        throw error;
+      }
     }
 
     const code = generateOtpCode();

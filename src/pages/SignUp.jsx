@@ -119,7 +119,7 @@ const SignUp = () => {
             const response = await fetch("/api/auth/send-otp", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email: email.trim().toLowerCase() }),
+                body: JSON.stringify({ email: email.trim().toLowerCase(), action: 'signup' }),
             });
             const raw = await response.text();
             const data = parseApiPayload(raw);
@@ -199,7 +199,7 @@ const SignUp = () => {
             const response = await fetch("/api/auth/send-otp", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email: email.trim().toLowerCase() }),
+                body: JSON.stringify({ email: email.trim().toLowerCase(), action: 'signup' }),
             });
             const raw = await response.text();
             const data = parseApiPayload(raw);
