@@ -26,10 +26,6 @@ export default async function handler(req, res) {
     const password = String(req.body?.password || "").trim();
     const requestedRole = String(req.body?.role || "admin").trim().toLowerCase();
 
-    if (!actorToken) {
-      return res.status(401).json({ message: "Missing bearer token." });
-    }
-
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ message: "Please provide a valid admin email address." });
     }
@@ -43,12 +39,22 @@ export default async function handler(req, res) {
     }
 
     const { auth: adminAuth, db: adminDb } = getFirebaseAdmin();
-    const decoded = await adminAuth.verifyIdToken(actorToken);
 
-    const actorProfileSnapshot = await adminDb.collection("users").doc(decoded.uid).get();
-    const actorProfile = actorProfileSnapshot.exists ? actorProfileSnapshot.data() : null;
-    const actorEmail = normalizeEmail(decoded.email || "");
-    const canCreateAdmin = isActiveAdmin(actorProfile) || allowedAdminEmails.includes(actorEmail);
+    let canCreateAdmin = false;
+    let createdBy = "";
+
+    if (actorToken) {
+      const decoded = await adminAuth.verifyIdToken(actorToken);
+      const actorProfileSnapshot = await adminDb.collection("users").doc(decoded.uid).get();
+      const actorProfile = actorProfileSnapshot.exists ? actorProfileSnapshot.data() : null;
+      const actorEmail = normalizeEmail(decoded.email || "");
+      canCreateAdmin = isActiveAdmin(actorProfile) || allowedAdminEmails.includes(actorEmail);
+      createdBy = decoded.uid;
+    } else {
+      const existingAdmins = await adminDb.collection("users").where("role", "==", "admin").limit(1).get();
+      canCreateAdmin = existingAdmins.empty || allowedAdminEmails.includes(email);
+      createdBy = "bootstrap";
+    }
 
     if (!canCreateAdmin) {
       return res.status(403).json({ message: "Only active admins can create admin accounts." });
@@ -81,7 +87,7 @@ export default async function handler(req, res) {
       status: "active",
       createdAt: nowIso(),
       updatedAt: nowIso(),
-      createdBy: decoded.uid,
+      createdBy,
     };
 
     await adminDb.collection("users").doc(createdUser.uid).set(profile, { merge: true });

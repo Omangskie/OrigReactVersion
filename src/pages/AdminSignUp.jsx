@@ -23,17 +23,11 @@ const AdminSignUp = () => {
   const { authReady, session, userProfile } = useUserAuth();
   const navigate = useNavigate();
 
-  const isCurrentAdmin = Boolean(session?.uid) && userProfile?.role === "admin";
-
   useEffect(() => {
-    if (!authReady || loading) {
-      return;
+    if (authReady && session && userProfile?.role === "admin" && !loading) {
+      navigate("/admin", { replace: true });
     }
-
-    if (!isCurrentAdmin) {
-      navigate("/admin/signin", { replace: true });
-    }
-  }, [authReady, isCurrentAdmin, loading, navigate]);
+  }, [authReady, loading, navigate, session, userProfile?.role]);
 
   const checks = passwordChecks(password);
   const validPassword = Object.values(checks).every(Boolean);
@@ -49,20 +43,20 @@ const AdminSignUp = () => {
       return;
     }
 
-    if (!isCurrentAdmin) {
-      setError("Sign in as an admin to create another admin account.");
-      return;
-    }
-
     setLoading(true);
     try {
-      const actorToken = await session.getIdToken();
+      const actorToken = session ? await session.getIdToken() : "";
+      const headers = {
+        "Content-Type": "application/json",
+      };
+
+      if (actorToken) {
+        headers.Authorization = `Bearer ${actorToken}`;
+      }
+
       const response = await fetch(ADMIN_CREATE_ENDPOINT || "/api/admin/create-user", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${actorToken}`,
-        },
+        headers,
         body: JSON.stringify({
           email: email.trim().toLowerCase(),
           password,
@@ -90,7 +84,7 @@ const AdminSignUp = () => {
         <p className="text-xs uppercase tracking-[0.35em] text-emerald-400">Admin Registration</p>
         <h1 className="mt-3 text-3xl font-black uppercase tracking-tight">Create Admin Account</h1>
         <p className="mt-3 text-sm text-zinc-400">
-          Create a new admin account while signed in as an existing admin.
+          Create a new admin account. If an admin already exists, your email must be allowlisted or you must be signed in as an admin.
         </p>
 
         <form onSubmit={handleSubmit} className="mt-8 space-y-4">
