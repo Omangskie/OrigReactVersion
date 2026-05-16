@@ -14,6 +14,7 @@ const AdminSignUp = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [role, setRole] = useState("admin");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -66,21 +67,21 @@ const AdminSignUp = () => {
       return;
     }
 
-    if (hasExistingAdmin && !isConfiguredAdminEmail(email)) {
+    if (role === "admin" && hasExistingAdmin && !isConfiguredAdminEmail(email)) {
       setError("This email is not allowed to self-register as admin.");
       return;
     }
 
     setLoading(true);
     try {
-      const result = await signUpNewUser(email, password, { role: "admin" });
+      const result = await signUpNewUser(email, password, { role });
 
       if (!result.success) {
         setError(result.error || "Unable to create admin account.");
         return;
       }
 
-      navigate("/admin", { replace: true });
+      navigate(result.profile?.role === "admin" ? "/admin" : "/homepage", { replace: true });
     } catch (signupError) {
       setError(signupError?.message || "Unable to create admin account.");
     } finally {
@@ -140,6 +141,22 @@ const AdminSignUp = () => {
               placeholder="Re-enter password"
               autoComplete="new-password"
             />
+          </div>
+
+          <div>
+            <label htmlFor="admin-signup-role" className="block text-sm text-zinc-300 mb-2">Account role</label>
+            <select
+              id="admin-signup-role"
+              value={role}
+              onChange={(event) => setRole(event.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-100 focus:outline-none focus:border-emerald-400"
+            >
+              <option value="admin">Admin</option>
+              <option value="collaborator">Collaborator</option>
+            </select>
+            <p className="mt-2 text-xs text-zinc-500">
+              Admin roles require an allowlisted email once an admin already exists.
+            </p>
           </div>
 
           <div className="rounded-xl border border-white/10 bg-slate-950/70 p-4 text-xs text-zinc-400 space-y-2">
